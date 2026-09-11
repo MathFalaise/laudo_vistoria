@@ -24,17 +24,30 @@ def criar_cliente() -> genai.Client:
 
 def _extrair_json(texto: str) -> dict:
     """Extrai o objeto JSON da resposta do modelo, mesmo que ele venha
-    embrulhado em ```json ... ``` ou com espaços/quebras extras."""
+    embrulhado em ```json ... ```, com espaços/quebras extras, ou dentro
+    de uma lista (ex.: [{...}]) em vez de um objeto solto."""
     texto = texto.strip()
-    match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", texto, re.DOTALL)
+    match = re.search(r"```(?:json)?\s*(.*)\s*```", texto, re.DOTALL)
     if match:
-        texto = match.group(1)
-    elif not texto.startswith("{"):
-        inicio = texto.find("{")
-        fim = texto.rfind("}")
-        if inicio != -1 and fim != -1:
-            texto = texto[inicio : fim + 1]
-    return json.loads(texto)
+        texto = match.group(1).strip()
+
+    dados = json.loads(texto)
+    if isinstance(dados, list):
+        if not dados or not isinstance(dados[0], dict):
+            raise ValueError("Resposta é uma lista JSON sem objeto de categorias dentro.")
+        dados = dados[0]
+    return dados
+
+
+def _schema_categorias(categorias: list) -> types.Schema:
+    """Monta o response_schema que força o modelo a devolver um objeto
+    JSON plano com uma chave string por categoria, evitando que a
+    resposta venha embrulhada em lista ou com chaves inesperadas."""
+    return types.Schema(
+        type="OBJECT",
+        properties={categoria: types.Schema(type="STRING") for categoria in categorias},
+        required=categorias,
+    )
 
 
 def analisar_comodo(cliente: genai.Client, blocos_imagem: list, nome_comodo: str) -> dict:
@@ -47,10 +60,22 @@ def analisar_comodo(cliente: genai.Client, blocos_imagem: list, nome_comodo: str
         model=MODEL_NAME,
         contents=conteudo,
         config=types.GenerateContentConfig(
-            max_output_tokens=2048,
+            # Cômodos com muitas fotos/mobília geram descrições longas —
+            # um teto baixo aqui corta o JSON no meio e quebra o parsing.
+            max_output_tokens=8192,
             response_mime_type="application/json",
+            response_schema=_schema_categorias(CATEGORIAS),
         ),
     )
+
+    candidato = resposta.candidates[0] if resposta.candidates else None
+    if candidato is not None and candidato.finish_reason == types.FinishReason.MAX_TOKENS:
+        raise RuntimeError(
+            f"A resposta do modelo para o cômodo '{nome_comodo}' foi cortada por "
+            "atingir o limite de max_output_tokens antes de terminar o JSON "
+            "(cômodo com descrição muito longa). Aumente max_output_tokens em "
+            "gemini_client.py e tente novamente."
+        )
 
     texto_bruto = resposta.text
 
