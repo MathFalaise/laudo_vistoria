@@ -5,12 +5,19 @@ de um cômodo + o prompt com as 8 categorias e retorna o texto gerado em JSON.
 
 import json
 import re
+import time
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from config import API_KEY, MODEL_NAME, CATEGORIAS
 from style_guide import montar_prompt_comodo
+
+# Nº de tentativas extras e espera entre elas quando o Gemini responde
+# 503 (servidor sobrecarregado) — esse erro é comum e quase sempre
+# transitório; a própria API pede pra tentar de novo mais tarde.
+MAX_TENTATIVAS = 4
+ESPERA_BASE_SEGUNDOS = 10
 
 
 def criar_cliente() -> genai.Client:
@@ -50,23 +57,43 @@ def _schema_categorias(categorias: list) -> types.Schema:
     )
 
 
-def analisar_comodo(cliente: genai.Client, blocos_imagem: list, nome_comodo: str) -> dict:
+def analisar_comodo(
+    cliente: genai.Client, blocos_imagem: list, nome_comodo: str, notas_extras: str = ""
+) -> dict:
     """Chama a API UMA vez para o cômodo inteiro e retorna
-    {categoria: texto} para as 8 categorias definidas em config.CATEGORIAS."""
-    prompt = montar_prompt_comodo(nome_comodo, CATEGORIAS)
+    {categoria: texto} para as 8 categorias definidas em config.CATEGORIAS.
+
+    `notas_extras` repassa informação específica deste imóvel (ex.: cor
+    exata de tinta confirmada) para o prompt — ver style_guide.montar_prompt_comodo."""
+    prompt = montar_prompt_comodo(nome_comodo, CATEGORIAS, notas_extras)
     conteudo = list(blocos_imagem) + [prompt]
 
-    resposta = cliente.models.generate_content(
-        model=MODEL_NAME,
-        contents=conteudo,
-        config=types.GenerateContentConfig(
-            # Cômodos com muitas fotos/mobília geram descrições longas —
-            # um teto baixo aqui corta o JSON no meio e quebra o parsing.
-            max_output_tokens=8192,
-            response_mime_type="application/json",
-            response_schema=_schema_categorias(CATEGORIAS),
-        ),
-    )
+    resposta = None
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            resposta = cliente.models.generate_content(
+                model=MODEL_NAME,
+                contents=conteudo,
+                config=types.GenerateContentConfig(
+                    # Cômodos com muitas fotos/mobília geram descrições
+                    # longas — um teto baixo aqui corta o JSON no meio e
+                    # quebra o parsing.
+                    max_output_tokens=8192,
+                    response_mime_type="application/json",
+                    response_schema=_schema_categorias(CATEGORIAS),
+                ),
+            )
+            break
+        except errors.ServerError as erro:
+            if tentativa == MAX_TENTATIVAS:
+                raise
+            espera = ESPERA_BASE_SEGUNDOS * tentativa
+            print(
+                f"  Servidor do Gemini indisponível para '{nome_comodo}' "
+                f"({erro.__class__.__name__}), tentativa {tentativa}/{MAX_TENTATIVAS}. "
+                f"Aguardando {espera}s..."
+            )
+            time.sleep(espera)
 
     candidato = resposta.candidates[0] if resposta.candidates else None
     if candidato is not None and candidato.finish_reason == types.FinishReason.MAX_TOKENS:

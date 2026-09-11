@@ -29,6 +29,15 @@ def main():
         description="Gera automaticamente o laudo de vistoria de um imóvel a partir das fotos organizadas por cômodo."
     )
     parser.add_argument("pasta_imovel", help="Caminho da pasta do imóvel (contendo uma subpasta por cômodo)")
+    parser.add_argument(
+        "--notas",
+        default="",
+        help=(
+            "Informações confirmadas sobre este imóvel (ex.: cor exata de "
+            "tinta de parede/teto) para o modelo usar em vez de advinhar "
+            "pela foto. Aplicada a todos os cômodos desta execução."
+        ),
+    )
     args = parser.parse_args()
 
     cliente = criar_cliente()
@@ -39,9 +48,17 @@ def main():
         return
 
     resultados = {}
+    falhas = []
     for nome_comodo in nomes_comodo:
         pasta_comodo = os.path.join(args.pasta_imovel, nome_comodo)
-        dados = processar_comodo(cliente, pasta_comodo, nome_comodo)
+        try:
+            dados = processar_comodo(cliente, pasta_comodo, nome_comodo, args.notas)
+        except Exception as erro:
+            # Um cômodo problemático não deve derrubar o laudo inteiro dos
+            # outros — registra a falha e segue para o próximo cômodo.
+            print(f"  ERRO ao processar '{nome_comodo}': {erro}")
+            falhas.append(nome_comodo)
+            continue
         if not dados:
             continue
         caminho_txt = salvar_txt_comodo(pasta_comodo, nome_comodo, dados)
@@ -51,6 +68,9 @@ def main():
     if resultados:
         caminho_completo = salvar_relatorio_completo(args.pasta_imovel, resultados)
         print(f"\nLaudo completo salvo em: {caminho_completo}")
+
+    if falhas:
+        print(f"\nCômodos que falharam e precisam ser rodados de novo: {', '.join(falhas)}")
 
 
 if __name__ == "__main__":

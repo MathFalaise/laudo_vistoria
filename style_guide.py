@@ -98,9 +98,15 @@ relevante, responda apenas: "Sem observações."
 }
 
 
-def montar_prompt_comodo(nome_comodo: str, categorias: list) -> str:
+def montar_prompt_comodo(nome_comodo: str, categorias: list, notas_extras: str = "") -> str:
     """Monta UM ÚNICO prompt pedindo as 8 categorias de uma vez, com a
-    resposta em JSON — troca 8 chamadas de API por cômodo por apenas 1."""
+    resposta em JSON — troca 8 chamadas de API por cômodo por apenas 1.
+
+    `notas_extras` é informação específica do imóvel em vistoria (ex.: nome
+    exato da cor de tinta usada, confirmado pelo vistoriador) que ajuda o
+    modelo a não precisar advinhar detalhes que a foto sozinha não garante.
+    Fica de fora de REGRAS_GERAIS/INSTRUCAO_CATEGORIA porque é válida só
+    para esta vistoria, não para todo laudo gerado pelo script."""
     blocos_categoria = "\n".join(
         f'- "{categoria}": {INSTRUCAO_CATEGORIA[categoria].strip()}'
         for categoria in categorias
@@ -108,9 +114,18 @@ def montar_prompt_comodo(nome_comodo: str, categorias: list) -> str:
 
     chaves_exemplo = ", ".join(f'"{categoria}": "..."' for categoria in categorias)
 
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel específico (use estes "
+            "dados exatos sempre que se aplicarem, em vez de tentar advinhar "
+            f"pela foto):\n{notas_extras.strip()}\n\n"
+        )
+
     return (
         f"{REGRAS_GERAIS}\n\n"
         f"Cômodo: {nome_comodo}\n\n"
+        f"{bloco_notas}"
         "Analise todas as fotos fornecidas deste cômodo e descreva CADA uma "
         "das categorias abaixo, seguindo à risca as instruções de cada uma "
         "e o formato de escrita definido acima:\n\n"
