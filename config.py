@@ -1,0 +1,42 @@
+"""
+Configurações gerais do gerador automático de laudo de vistoria.
+"""
+
+import os
+
+# Chave de API da Anthropic (defina como variável de ambiente ANTHROPIC_API_KEY)
+API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# Modelo Claude usado para leitura das fotos (precisa suportar visão)
+MODEL_NAME = "claude-sonnet-4-5-20250929"
+
+# Extensões de imagem aceitas dentro das pastas de cômodo
+EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")
+
+# Tamanho máximo (em pixels, lado maior) para redimensionar as fotos antes de
+# enviar à API — reduz custo/tempo sem perder detalhe relevante
+TAMANHO_MAX_IMAGEM = 1568
+
+# Categorias do laudo, na ordem em que devem aparecer no relatório final
+CATEGORIAS = [
+    "paredes",
+    "piso",
+    "teto",
+    "porta",
+    "janela",
+    "eletrico",
+    "mobilia",
+    "obs",
+]
+
+# Rótulos de exibição de cada categoria
+ROTULOS_CATEGORIA = {
+    "paredes": "Paredes",
+    "piso": "Piso",
+    "teto": "Teto",
+    "porta": "Porta",
+    "janela": "Janela",
+    "eletrico": "Componentes Elétricos",
+    "mobilia": "Mobília",
+    "obs": "OBS",
+}
