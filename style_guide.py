@@ -30,6 +30,18 @@ regras de formatação:
   cômodo sem janela), responda apenas: "Não se aplica."
 - Vidro de box de banheiro: use sempre o termo "vidro Blindex" (nunca
   "vidro temperado").
+- ORTOGRAFIA E GRAMÁTICA: revise mentalmente cada frase antes de
+  finalizar. Erro de digitação, palavra errada ou concordância errada
+  (ex.: "en" em vez de "em", "suspendo" em vez de "suspenso") NUNCA pode
+  aparecer no texto final — isso é inaceitável neste laudo.
+- CONSISTÊNCIA ENTRE CÔMODOS: quando o mesmo tipo de acabamento aparecer
+  em mais de um cômodo (ex.: parede pintada lisa na mesma cor, piso no
+  mesmo material/cor, revestimento cerâmico igual), descreva com a MESMA
+  estrutura de frase em todos os cômodos, mudando apenas o que realmente
+  for diferente (cor, detalhes extras como rodapé). NÃO varie a fórmula
+  da frase à toa (ex.: não alterne entre "Paredes com acabamento em
+  pintura...", "Paredes com pintura lisa...", "Paredes em pintura..." —
+  escolha uma fórmula fixa por tipo de acabamento e repita).
 """
 
 EXEMPLOS_MOBILIA = """
@@ -55,6 +67,15 @@ INSTRUCAO_CATEGORIA = {
 Descreva as paredes do cômodo: material/acabamento (pintura, revestimento,
 papel de parede, textura), cor(es) e estado de conservação (trincas,
 manchas, bolhas, desgaste). Não descreva móveis nem outros itens.
+Use sempre uma destas fórmulas fixas de abertura de frase, conforme o
+acabamento (nunca varie a fórmula para o mesmo tipo de acabamento):
+- Parede pintada lisa, sem outro detalhe: "Paredes em pintura lisa na cor
+  [cor], em bom estado."
+- Parede pintada lisa com rodapé: "Paredes em pintura lisa na cor [cor],
+  com rodapé em [material] na cor [cor], em bom estado."
+- Parede com revestimento cerâmico: "Paredes em revestimento cerâmico na
+  cor [cor], em bom estado." (acrescente ", com rejunte na cor [cor]," se
+  o rejunte for visível e de cor diferente do revestimento).
 """,
     "piso": """
 Descreva o piso do cômodo: material (porcelanato, laminado, cerâmica,
