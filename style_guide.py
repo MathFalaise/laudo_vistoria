@@ -28,6 +28,8 @@ regras de formatação:
   "Mais um/uma [item]..." em vez de repetir a descrição inteira.
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um
   cômodo sem janela), responda apenas: "Não se aplica."
+- Vidro de box de banheiro: use sempre o termo "vidro Blindex" (nunca
+  "vidro temperado").
 """
 
 EXEMPLOS_MOBILIA = """
@@ -60,8 +62,12 @@ vinílico, etc.), cor e padrão (se houver), e estado de conservação
 (riscos, trincas, desgaste, rejunte).
 """,
     "teto": """
-Descreva o teto do cômodo: tipo (laje pintada, forro de gesso, sanca,
-forro de PVC), cor e estado de conservação.
+Descreva o teto do cômodo. A estrutura do teto em si é sempre de laje/
+alvenaria — quando houver um forro instalado por baixo dela, descreva como
+"rebaixo em gesso" (nunca use o termo genérico "forro" sozinho; use
+"rebaixo em gesso", "rebaixo em gesso com sanca", etc., conforme o caso).
+Se não houver rebaixo e o teto for só a laje pintada, descreva como "laje
+pintada". Informe também cor e estado de conservação.
 """,
     "porta": """
 Descreva a(s) porta(s) de acesso do cômodo (não confundir com portas de
@@ -75,10 +81,20 @@ ferragens/fechos, estado de conservação e persianas ou cortinas fixas, se
 houver.
 """,
     "eletrico": """
-Descreva os componentes elétricos visíveis do cômodo: tomadas e
-interruptores (quantidade e tipo), pontos de luz, disjuntores visíveis,
-informando se foram testados e se estão funcionando, e estado de
-conservação.
+Descreva os componentes elétricos visíveis do cômodo:
+- Pontos de iluminação: agrupe TODOS os pontos de iluminação do cômodo em
+  UMA ÚNICA frase, informando a quantidade total e o tipo (ex.: "Três
+  pontos de iluminação do tipo luminária de embutir em LED, na cor
+  branca, em bom estado."). NÃO repita "Mais um ponto de iluminação"
+  várias vezes — some tudo em um único item, mesmo que a exceção à regra
+  geral de "Mais um/uma [item]" acima.
+- Tomadas/interruptores: descreva como "placas em polímero na cor [cor]",
+  detalhando a função de cada uma (interruptores, tomadas, placas cegas,
+  placas para saída de fios de internet/TV, etc.) e a quantidade de cada
+  tipo — não use o termo "espelhos" para as placas.
+- Disjuntores/quadro de disjuntores, se visíveis, informando se foram
+  testados e se estão funcionando.
+- Estado de conservação geral dos itens acima.
 """,
     "mobilia": """
 Descreva TODA a mobília fixa/planejada do cômodo (armários, painéis,
@@ -90,10 +106,17 @@ janelas, portas de acesso ou eletrodomésticos soltos — apenas mobília.
 """
     + EXEMPLOS_MOBILIA,
     "obs": """
-Liste observações relevantes que não se encaixam nas categorias
-anteriores: avarias, manchas, infiltrações, itens danificados, cheiros,
-ou qualquer ponto que mereça destaque no laudo. Se não houver nada
-relevante, responda apenas: "Sem observações."
+Liste SOMENTE avarias e observações claramente relevantes que não se
+encaixam nas categorias anteriores: trincas visíveis, manchas grandes,
+infiltrações, itens danificados de forma perceptível, cheiros fortes, ou
+qualquer ponto que realmente mereça destaque no laudo.
+NÃO relate: marcas mínimas/pontuais de oxidação (ex.: pequenos pontos em
+dobradiças que só aparecem olhando de perto), sujidade, poeira, cinzas ou
+resíduos comuns do uso do dia a dia, nem pequenas imperfeições que só
+apareceriam em exame minucioso. Na dúvida se um defeito é relevante o
+bastante, só relate se ele for facilmente visível a uma pessoa observando
+o cômodo normalmente — não ao aproximar a câmera do detalhe.
+Se não houver nada relevante, responda apenas: "Sem observações."
 """,
 }
 
@@ -136,4 +159,57 @@ def montar_prompt_comodo(nome_comodo: str, categorias: list, notas_extras: str =
         "estas chaves, cada uma com uma string como valor (use \\n para "
         "separar as linhas dentro do texto de cada categoria, sem linha em "
         f"branco entre os itens): {{{chaves_exemplo}}}"
+    )
+
+
+def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str = "") -> str:
+    """Monta o prompt de REVISÃO: pega um laudo já gerado (todos os cômodos
+    de um imóvel, em JSON) e pede pro modelo reescrever o texto seguindo as
+    regras de estilo atuais — sem olhar fotos de novo, é uma passada de
+    texto puro, bem mais barata que reprocessar tudo com as imagens.
+
+    Útil quando o style_guide muda depois que um laudo já foi gerado: em
+    vez de rodar main.py de novo (gastando cota de API com as fotos), roda
+    revisar.py só pra padronizar o texto já escrito com a regra nova."""
+    blocos_categoria = "\n".join(
+        f'- "{categoria}": {INSTRUCAO_CATEGORIA[categoria].strip()}'
+        for categoria in categorias
+    )
+
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel específico (use estes "
+            "dados exatos sempre que se aplicarem):\n"
+            f"{notas_extras.strip()}\n\n"
+        )
+
+    return (
+        f"{REGRAS_GERAIS}\n\n"
+        f"{bloco_notas}"
+        "Abaixo está um laudo de vistoria JÁ GERADO para um imóvel inteiro, "
+        "em JSON (cada chave é o nome de um cômodo; dentro de cada cômodo, "
+        "uma chave por categoria com o texto já escrito):\n\n"
+        f"{laudo_json}\n\n"
+        "Sua tarefa é REVISAR esse texto para seguir à risca as regras de "
+        "formatação acima e as instruções de cada categoria abaixo, "
+        "SEM reanalisar fotos (você não tem acesso a elas nesta etapa):\n\n"
+        f"{blocos_categoria}\n\n"
+        "REGRAS DA REVISÃO — muito importante:\n"
+        "- NÃO invente, remova nem altere fatos já observados (materiais, "
+        "cores, quantidades, tipos, marcas, medidas) — mexa só na "
+        "terminologia, formatação e nível de detalhe, conforme as regras.\n"
+        "- A única remoção de conteúdo permitida é a de itens triviais na "
+        "categoria \"obs\" que a instrução acima manda excluir (marcas "
+        "mínimas de oxidação, sujidade/poeira/cinzas comuns, etc.).\n"
+        "- Mantenha 'Não se aplica.' e 'Sem observações.' exatamente como "
+        "estão nos cômodos/categorias onde já aparecem assim.\n"
+        "- Devolva TODOS os cômodos e TODAS as categorias que vieram no "
+        "JSON de entrada, no mesmo formato (cômodo -> categoria -> texto), "
+        "sem pular nenhum.\n\n"
+        "IMPORTANTE — formato da resposta:\n"
+        "Responda APENAS com um objeto JSON válido, sem texto antes ou "
+        "depois, sem markdown, sem ```json. Use \\n para separar linhas "
+        "dentro do texto de cada categoria, sem linha em branco entre os "
+        "itens."
     )

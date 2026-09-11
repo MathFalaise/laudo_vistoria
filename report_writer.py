@@ -8,16 +8,63 @@ import os
 
 from config import CATEGORIAS, ROTULOS_CATEGORIA
 
+# Texto literal que INSTRUCAO_CATEGORIA manda o modelo responder quando uma
+# categoria não existe naquele cômodo (ver style_guide.REGRAS_GERAIS). Uma
+# categoria "não se aplica" não entra no .txt final — nem o rótulo nem o
+# texto — em vez de deixar um bloco vazio no meio do laudo.
+TEXTO_NAO_SE_APLICA = "Não se aplica."
+
 
 def montar_texto_comodo(nome_comodo: str, dados: dict) -> str:
     linhas = [f"{nome_comodo.upper()}", ""]
+    teve_categoria = False
     for categoria in CATEGORIAS:
         rotulo = ROTULOS_CATEGORIA[categoria]
         texto = dados.get(categoria, "").strip()
+        if not texto or texto == TEXTO_NAO_SE_APLICA:
+            continue
         linhas.append(f"{rotulo}:")
-        linhas.append(texto if texto else "Não se aplica.")
+        linhas.append(texto)
         linhas.append("")
+        teve_categoria = True
+    if not teve_categoria:
+        linhas.append("Nenhuma categoria aplicável neste cômodo.")
     return "\n".join(linhas).strip() + "\n"
+
+
+def parsear_txt_comodo(caminho_txt: str) -> dict:
+    """Lê um <comodo>_vistoria.txt já salvo (formato gerado por
+    montar_texto_comodo) e devolve {categoria: texto}, no mesmo formato de
+    `dados` que analisar_comodo produz. Usado pelo revisar.py para
+    reprocessar um laudo já escrito sem precisar reanalisar as fotos.
+
+    Como montar_texto_comodo agora omite categorias "Não se aplica.", elas
+    voltam como string vazia aqui — sem problema, salvar_relatorio_completo/
+    salvar_txt_comodo tratam string vazia do mesmo jeito."""
+    rotulo_para_categoria = {rotulo: categoria for categoria, rotulo in ROTULOS_CATEGORIA.items()}
+
+    with open(caminho_txt, "r", encoding="utf-8") as arquivo:
+        linhas = arquivo.read().strip("\n").split("\n")
+
+    dados = {}
+    categoria_atual = None
+    buffer = []
+
+    def _fechar_categoria_atual():
+        if categoria_atual is not None:
+            dados[categoria_atual] = "\n".join(buffer).strip()
+
+    for linha in linhas[1:]:  # linhas[0] é o nome do cômodo em maiúsculas
+        rotulo_candidato = linha[:-1] if linha.endswith(":") else None
+        if rotulo_candidato in rotulo_para_categoria:
+            _fechar_categoria_atual()
+            categoria_atual = rotulo_para_categoria[rotulo_candidato]
+            buffer = []
+        elif linha.strip():
+            buffer.append(linha)
+    _fechar_categoria_atual()
+
+    return dados
 
 
 def salvar_txt_comodo(pasta_comodo: str, nome_comodo: str, dados: dict) -> str:
