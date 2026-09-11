@@ -1,6 +1,6 @@
 """
 Ponto de entrada: percorre a pasta do imóvel (uma subpasta por cômodo),
-processa cada cômodo com a API da Claude e gera:
+processa cada cômodo com a API do Gemini e gera:
   - um .txt de laudo dentro de cada pasta de cômodo
   - um .txt consolidado com o imóvel inteiro, na raiz da pasta do imóvel
 
@@ -11,7 +11,7 @@ Uso:
 import argparse
 import os
 
-from claude_client import criar_cliente
+from gemini_client import criar_cliente
 from room_processor import processar_comodo
 from report_writer import salvar_txt_comodo, salvar_relatorio_completo
 

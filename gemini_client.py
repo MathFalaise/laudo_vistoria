@@ -1,18 +1,25 @@
+"""
+Camada fina sobre a API do Google Gemini (camada gratuita): envia as fotos
+de um cômodo + o prompt com as 8 categorias e retorna o texto gerado em JSON.
+"""
+
 import json
 import re
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from config import API_KEY, MODEL_NAME, CATEGORIAS
 from style_guide import montar_prompt_comodo
 
 
-def criar_cliente() -> anthropic.Anthropic:
+def criar_cliente() -> genai.Client:
     if not API_KEY:
         raise RuntimeError(
-            "Defina a variável de ambiente ANTHROPIC_API_KEY antes de rodar o script."
+            "Defina a variável de ambiente GEMINI_API_KEY antes de rodar o script "
+            "(gere uma chave gratuita em https://aistudio.google.com/apikey)."
         )
-    return anthropic.Anthropic(api_key=API_KEY)
+    return genai.Client(api_key=API_KEY)
 
 
 def _extrair_json(texto: str) -> dict:
@@ -30,19 +37,22 @@ def _extrair_json(texto: str) -> dict:
     return json.loads(texto)
 
 
-def analisar_comodo(cliente: anthropic.Anthropic, blocos_imagem: list, nome_comodo: str) -> dict:
+def analisar_comodo(cliente: genai.Client, blocos_imagem: list, nome_comodo: str) -> dict:
     """Chama a API UMA vez para o cômodo inteiro e retorna
     {categoria: texto} para as 8 categorias definidas em config.CATEGORIAS."""
     prompt = montar_prompt_comodo(nome_comodo, CATEGORIAS)
-    conteudo = list(blocos_imagem) + [{"type": "text", "text": prompt}]
+    conteudo = list(blocos_imagem) + [prompt]
 
-    resposta = cliente.messages.create(
+    resposta = cliente.models.generate_content(
         model=MODEL_NAME,
-        max_tokens=2048,
-        messages=[{"role": "user", "content": conteudo}],
+        contents=conteudo,
+        config=types.GenerateContentConfig(
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+        ),
     )
 
-    texto_bruto = resposta.content[0].text
+    texto_bruto = resposta.text
 
     try:
         dados = _extrair_json(texto_bruto)

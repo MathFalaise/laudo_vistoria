@@ -4,11 +4,13 @@ Configurações gerais do gerador automático de laudo de vistoria.
 
 import os
 
-# Chave de API da Anthropic (defina como variável de ambiente ANTHROPIC_API_KEY)
-API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+# Chave de API do Google Gemini (defina como variável de ambiente GEMINI_API_KEY).
+# Gratuita: gere em https://aistudio.google.com/apikey, sem cartão de crédito.
+API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Modelo Claude usado para leitura das fotos (precisa suportar visão)
-MODEL_NAME = "claude-sonnet-4-5-20250929"
+# Modelo Gemini usado para leitura das fotos (precisa suportar visão).
+# gemini-3.6-flash está disponível na camada gratuita do Google AI Studio.
+MODEL_NAME = "gemini-3.6-flash"
 
 # Extensões de imagem aceitas dentro das pastas de cômodo
 EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")

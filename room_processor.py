@@ -1,4 +1,4 @@
-from claude_client import analisar_comodo
+from gemini_client import analisar_comodo
 from image_utils import codificar_fotos_comodo
 
 
