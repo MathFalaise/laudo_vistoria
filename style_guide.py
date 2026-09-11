@@ -24,6 +24,12 @@ regras de formatação:
   tomadas, etc.).
 - Descreva apenas o que está de fato visível nas fotos fornecidas. Não
   invente itens, materiais ou cores que não possam ser confirmados.
+- FERRAGENS (maçaneta, fechadura, dobradiças, roseta, alisares, puxadores,
+  etc.): cite SOMENTE os componentes que você consegue identificar
+  claramente na foto. NÃO complete o conjunto com peças que "costumam
+  vir junto" (ex.: não escreva "roseta" só porque a porta tem maçaneta e
+  fechadura, se a roseta em si não aparecer visível na imagem). Na
+  dúvida sobre um componente específico, omita-o em vez de arriscar.
 - Se dois ou mais itens forem idênticos ou muito parecidos, agrupe usando
   "Mais um/uma [item]..." em vez de repetir a descrição inteira.
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um
