@@ -16,6 +16,12 @@ regras de formatação:
   seguinte ao item anterior.
 - Padrão de frase: "Um/Uma [item] em [material] na(s) cor(es) [cor(es)],
   com [detalhes relevantes], em bom estado."
+- Se as notas do imóvel (ver abaixo) especificarem um nome de cor com
+  iniciais maiúsculas (nome de catálogo/fabricante, ex.: "Branco Gelo",
+  "Branco Neve", "Crômio"), reproduza esse nome EXATAMENTE como está nas
+  notas — mesma capitalização, sem hifenizar, sem converter para
+  minúsculo. Isso vale em TODOS os cômodos onde a nota se aplicar, sem
+  exceção — não varie a grafia entre um cômodo e outro.
 - Cores compostas usam hífen (ex.: marrom-claro, branco-gelo, cinza-chumbo).
 - Respeite a concordância de gênero e número em português.
 - Seja específico e direto — nunca use termos vagos como "aparenta",
