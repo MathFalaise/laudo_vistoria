@@ -78,6 +78,9 @@ def _cabecalho(pasta_imovel: str) -> str:
         "  DECISÃO:  OK        o item está certo, fica como está\n"
         "            CORRIGIR  escreva o texto certo em CORREÇÃO\n"
         "            REMOVER   o item sai do laudo\n"
+        "  Se a pendência tiver mais de uma linha \"Item:\" (ex.: um item\n"
+        "  repetido escrito com \"Mais um/uma\"), a CORREÇÃO substitui TODAS\n"
+        "  elas por uma linha só — ex.: \"Duas portas em madeira ...\".\n"
         "  REGRA:    opcional. Só preencha se o erro vale para QUALQUER imóvel\n"
         "            (ex.: Nunca citar roseta se ela não aparecer na foto).\n"
         "            Fato deste imóvel (ex.: a cozinha não tem porta) NÃO é\n"
@@ -98,8 +101,10 @@ def _bloco(numero: int, pendencia: dict) -> str:
         f"Categoria: {ROTULOS_CATEGORIA.get(categoria, categoria)}",
         f"Certeza: {pendencia.get('certeza', '')}%",
         f"Motivo: {pendencia.get('motivo', '')}",
-        f"Item: {pendencia.get('texto', '')}",
     ]
+    # Pendência de várias linhas (ex.: "Mais um/uma" + a linha anterior):
+    # uma linha "Item:" para cada uma.
+    linhas += [f"Item: {linha}" for linha in pendencia.get("texto", "").split("\n")]
     if pendencia.get("situacao"):
         linhas.append(f"Situação: {pendencia['situacao']}")
     linhas += [
@@ -144,7 +149,10 @@ def ler_pendencias(pasta_imovel: str) -> list:
                 continue
             chave, valor = linha.split(":", 1)
             campo = _CAMPOS.get(_sem_acento_maiusculo(chave))
-            if campo:
+            if campo == "texto" and atual.get("texto"):
+                # Pendência com várias linhas "Item:".
+                atual["texto"] += "\n" + valor.strip()
+            elif campo:
                 atual[campo] = valor.strip()
 
     for pendencia in pendencias:
@@ -157,27 +165,32 @@ def ler_pendencias(pasta_imovel: str) -> list:
 
 def aplicar_no_texto(texto_categoria: str, categoria: str, pendencia: dict) -> tuple:
     """Aplica a decisão de uma pendência no texto de uma categoria.
+    Uma pendência pode ter várias linhas: CORRIGIR troca todas por uma
+    linha só (no lugar da primeira), REMOVER tira todas.
     Devolve (novo_texto, erro); erro é None quando deu certo."""
     vazio = texto_vazio_da_categoria(categoria)
     # report_writer omite "Não se aplica." do .txt: categoria ausente
     # equivale a ter só a linha de categoria vazia.
     linhas = [linha for linha in texto_categoria.split("\n") if linha.strip()] or [vazio]
 
-    item = pendencia.get("texto", "")
-    if item not in linhas:
+    itens = [item for item in pendencia.get("texto", "").split("\n") if item.strip()]
+    if not itens or any(item not in linhas for item in itens):
         return texto_categoria, (
             "item não encontrado no laudo (o texto pode ter mudado, ex.: pelo "
             "revisar.py) — ajuste direto no .txt do cômodo e apague esta pendência"
         )
 
-    indice = linhas.index(item)
     if pendencia["decisao"] == "CORRIGIR":
         nova = normalizar_linha(pendencia.get("correcao", ""))
         if not nova:
             return texto_categoria, "DECISÃO é CORRIGIR, mas CORREÇÃO está vazia"
-        linhas[indice] = nova
+        primeira = linhas.index(itens[0])
+        linhas[primeira] = nova
+        for item in itens[1:]:
+            linhas.remove(item)
     elif pendencia["decisao"] == "REMOVER":
-        del linhas[indice]
+        for item in itens:
+            linhas.remove(item)
 
     reais = [linha for linha in linhas if linha not in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)]
     novo_texto = "\n".join(reais) if reais else vazio

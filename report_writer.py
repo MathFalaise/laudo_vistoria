@@ -5,6 +5,7 @@ com o imóvel inteiro.
 """
 
 import os
+import re
 
 from config import CATEGORIAS, ROTULOS_CATEGORIA
 
@@ -32,6 +33,19 @@ def normalizar_linha(texto: str) -> str:
     if sem_asterisco in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES):
         return sem_asterisco
     return f"*{sem_asterisco}" if sem_asterisco else ""
+
+
+# Linha no formato proibido "*Mais um/uma/dois..." — item repetido tem que
+# virar uma linha só com a quantidade total (ver "ITENS REPETIDOS" em
+# style_guide.REGRAS_GERAIS).
+_MAIS_UM = re.compile(
+    r"^\*\s*mais\s+(um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def linha_com_mais_um(linha: str) -> bool:
+    return bool(_MAIS_UM.match(linha))
 
 
 def montar_texto_comodo(nome_comodo: str, dados: dict) -> str:

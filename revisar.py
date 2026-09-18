@@ -12,10 +12,10 @@ Uso:
 import argparse
 import os
 
-from gemini_client import criar_cliente, revisar_laudo
+from gemini_client import criar_cliente, pendencias_mais_um, revisar_laudo
 from main import listar_pastas_comodo
 from report_writer import parsear_txt_comodo, salvar_txt_comodo, salvar_relatorio_completo
-from validacao import NOME_ARQUIVO_PENDENCIAS, ler_pendencias
+from validacao import NOME_ARQUIVO_PENDENCIAS, ler_pendencias, salvar_pendencias
 
 
 def main():
@@ -76,6 +76,21 @@ def main():
 
     caminho_completo = salvar_relatorio_completo(args.pasta_imovel, revisado)
     print(f"\nLaudo completo atualizado: {caminho_completo}")
+
+    # "Mais um/uma" que sobreviveu à correção automática vira pendência,
+    # para não chegar ao cliente sem o vistoriador ver.
+    residuais = [
+        dict(pendencia, comodo=nome_comodo)
+        for nome_comodo, dados in revisado.items()
+        for categoria, texto in dados.items()
+        for pendencia in pendencias_mais_um(categoria, texto)
+    ]
+    if residuais:
+        caminho_pendencias = salvar_pendencias(args.pasta_imovel, ler_pendencias(args.pasta_imovel) + residuais)
+        print(
+            f'\nATENÇÃO: {len(residuais)} linha(s) com "Mais um/uma" que a correção '
+            f"automática não resolveu — confira em: {caminho_pendencias}"
+        )
 
 
 if __name__ == "__main__":

@@ -10,20 +10,28 @@ import time
 from google import genai
 from google.genai import errors, types
 
-from config import API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA
+from config import API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA, ROTULOS_CATEGORIA
 from report_writer import (
     TEXTO_NAO_SE_APLICA,
     TEXTO_SEM_OBSERVACOES,
+    linha_com_mais_um,
     normalizar_linha,
     texto_vazio_da_categoria,
 )
-from style_guide import montar_prompt_comodo, montar_prompt_revisao
+from style_guide import montar_prompt_comodo, montar_prompt_consolidacao, montar_prompt_revisao
 
 # Nº de tentativas extras e espera entre elas quando o Gemini responde
 # 503 (servidor sobrecarregado) — esse erro é comum e quase sempre
 # transitório; a própria API pede pra tentar de novo mais tarde.
 MAX_TENTATIVAS = 4
 ESPERA_BASE_SEGUNDOS = 10
+
+SEM_MOTIVO = "(o modelo não explicou)"
+MOTIVO_MAIS_UM = (
+    'item repetido escrito com "Mais um/uma", e a correção automática não '
+    "resolveu — troque as linhas por uma só, com a quantidade total (ex.: "
+    '"*Duas portas ...")'
+)
 
 
 def criar_cliente() -> genai.Client:
@@ -108,21 +116,13 @@ def _schema_itens_com_certeza(categorias: list) -> types.Schema:
     )
 
 
-def _montar_categoria(categoria: str, itens) -> tuple:
-    """Junta os itens de uma categoria no texto do laudo e separa os que
-    ficaram abaixo de LIMIAR_CERTEZA. Devolve (texto, itens_incertos)."""
-    if not isinstance(itens, list) or not itens:
-        # O schema pede pelo menos 1 item; se mesmo assim vier vazio, não dá
-        # para afirmar nada sobre a categoria — vai para validação.
-        vazio = texto_vazio_da_categoria(categoria)
-        return vazio, [{
-            "categoria": categoria,
-            "texto": vazio,
-            "certeza": 0,
-            "motivo": "o modelo não devolveu nenhum item para esta categoria",
-        }]
-
-    linhas, incertos = [], []
+def _registros(itens) -> list:
+    """Converte a lista de itens devolvida pelo modelo em
+    [(linha, certeza, motivo)], uma tupla por linha do laudo. Um "texto" com
+    várias linhas vira várias linhas com a mesma certeza."""
+    registros = []
+    if not isinstance(itens, list):
+        return registros
     for item in itens:
         if not isinstance(item, dict):
             continue
@@ -131,33 +131,137 @@ def _montar_categoria(categoria: str, itens) -> tuple:
         except (TypeError, ValueError):
             certeza = 0
         motivo = " ".join(str(item.get("motivo", "")).split())
-        # Um "texto" com várias linhas vira vários itens com a mesma certeza.
         for bruta in str(item.get("texto", "")).splitlines():
             linha = normalizar_linha(bruta)
-            if not linha:
-                continue
-            linhas.append(linha)
-            if certeza < LIMIAR_CERTEZA:
-                incertos.append({
-                    "categoria": categoria,
-                    "texto": linha,
-                    "certeza": certeza,
-                    "motivo": motivo or "(o modelo não explicou)",
-                })
+            if linha:
+                registros.append((linha, certeza, motivo))
+    return registros
+
+
+def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list) -> list:
+    """Conserta uma categoria que veio com "Mais um/uma" apesar da regra:
+    UMA chamada de texto puro (sem fotos — custa uma fração de centavo) que
+    junta os itens repetidos numa linha só. Só roda quando o modelo
+    desobedece.
+
+    Linhas que não mudaram mantêm a certeza original; linhas novas (as
+    consolidadas) herdam a MENOR certeza entre as que sumiram. Se a chamada
+    falhar, devolve os registros originais — a trava de _montar_categoria
+    manda o que sobrar para validação."""
+    if not any(linha_com_mais_um(linha) for linha, _, _ in registros):
+        return registros
+
+    rotulo = ROTULOS_CATEGORIA[categoria]
+    texto = "\n".join(linha for linha, _, _ in registros)
+    schema = types.Schema(
+        type="OBJECT",
+        properties={"linhas": types.Schema(type="ARRAY", items=types.Schema(type="STRING"), min_items=1)},
+        required=["linhas"],
+    )
+    try:
+        bruto = _gerar_com_retry(
+            cliente,
+            [montar_prompt_consolidacao(rotulo, texto)],
+            response_schema=schema,
+            max_output_tokens=4096,
+            descricao_erro=f'a correção de "Mais um/uma" ({rotulo})',
+        )
+        novas = [normalizar_linha(str(linha)) for linha in _extrair_json(bruto).get("linhas", [])]
+        novas = [linha for linha in novas if linha]
+    except Exception as erro:
+        print(f'  Não consegui corrigir "Mais um/uma" em {rotulo} automaticamente ({erro.__class__.__name__}).')
+        return registros
+    if not novas:
+        return registros
+
+    print(f'  Corrigido automaticamente: "Mais um/uma" em {rotulo}.')
+    originais = {linha: (certeza, motivo) for linha, certeza, motivo in registros}
+    sumiram = [registro for registro in registros if registro[0] not in novas]
+    menos_certa = min(sumiram or registros, key=lambda registro: registro[1])
+    herdada = (menos_certa[1], menos_certa[2])
+    return [(linha, *originais.get(linha, herdada)) for linha in novas]
+
+
+def _montar_categoria(categoria: str, registros: list) -> tuple:
+    """Junta as linhas de uma categoria no texto do laudo e separa as
+    pendências. Devolve (texto, pendencias). Vira pendência:
+
+    - linha com certeza abaixo de LIMIAR_CERTEZA;
+    - linha "Mais um/uma..." que sobreviveu à correção automática — com
+      certeza 0 e levando junto a linha anterior (o item que ela
+      "continua"), para o vistoriador trocar as duas por uma só.
+
+    O "texto" de uma pendência pode ter mais de uma linha."""
+    vazio = texto_vazio_da_categoria(categoria)
+    if not registros:
+        # O schema pede pelo menos 1 item; se mesmo assim vier vazio, não dá
+        # para afirmar nada sobre a categoria — vai para validação.
+        return vazio, [{
+            "categoria": categoria,
+            "texto": vazio,
+            "certeza": 0,
+            "motivo": "o modelo não devolveu nenhum item para esta categoria",
+        }]
 
     # "Não se aplica."/"Sem observações." não convivem com itens reais; e,
     # sem itens reais, a categoria fica com o texto vazio certo para ela
     # ("Sem observações." no OBS, "Não se aplica." no resto).
-    vazios = (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)
-    reais = [linha for linha in linhas if linha not in vazios]
-    if reais:
-        return "\n".join(reais), [i for i in incertos if i["texto"] not in vazios]
+    reais = [r for r in registros if r[0] not in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)]
+    if not reais:
+        menos_certo = min(registros, key=lambda registro: registro[1])
+        if menos_certo[1] >= LIMIAR_CERTEZA:
+            return vazio, []
+        return vazio, [{
+            "categoria": categoria,
+            "texto": vazio,
+            "certeza": menos_certo[1],
+            "motivo": menos_certo[2] or SEM_MOTIVO,
+        }]
 
-    vazio = texto_vazio_da_categoria(categoria)
-    if incertos:
-        menos_certo = min(incertos, key=lambda i: i["certeza"])
-        incertos = [dict(menos_certo, texto=vazio)]
-    return vazio, incertos
+    pendencias = []
+    for indice, (linha, certeza, motivo) in enumerate(reais):
+        ultima = pendencias[-1] if pendencias else None
+        encosta_na_ultima = ultima is not None and ultima["_ate"] == indice - 1
+        if linha_com_mais_um(linha):
+            if encosta_na_ultima:
+                # A linha anterior já é pendência: junta as duas numa só.
+                motivo_anterior = ultima["motivo"]
+                ultima["texto"] += "\n" + linha
+                ultima["certeza"] = 0
+                ultima["motivo"] = (
+                    MOTIVO_MAIS_UM
+                    if motivo_anterior in (MOTIVO_MAIS_UM, SEM_MOTIVO)
+                    else f"{MOTIVO_MAIS_UM}; além disso: {motivo_anterior}"
+                )
+                ultima["_ate"] = indice
+                continue
+            linhas = ([reais[indice - 1][0]] if indice > 0 else []) + [linha]
+            pendencias.append({
+                "categoria": categoria,
+                "texto": "\n".join(linhas),
+                "certeza": 0,
+                "motivo": MOTIVO_MAIS_UM,
+                "_ate": indice,
+            })
+        elif certeza < LIMIAR_CERTEZA:
+            pendencias.append({
+                "categoria": categoria,
+                "texto": linha,
+                "certeza": certeza,
+                "motivo": motivo or SEM_MOTIVO,
+                "_ate": indice,
+            })
+
+    for pendencia in pendencias:
+        del pendencia["_ate"]
+    return "\n".join(linha for linha, _, _ in reais), pendencias
+
+
+def pendencias_mais_um(categoria: str, texto: str) -> list:
+    """Pendências de linhas "Mais um/uma" num texto já pronto (sem
+    certeza) — usado pelo revisar.py depois da revisão."""
+    registros = [(linha, 100, "") for linha in texto.split("\n") if linha.strip()]
+    return _montar_categoria(categoria, registros)[1] if registros else []
 
 
 def _gerar_com_retry(
@@ -246,7 +350,8 @@ def analisar_comodo(
 
     resultado, incertos = {}, []
     for categoria in CATEGORIAS:
-        texto, incertos_categoria = _montar_categoria(categoria, dados.get(categoria))
+        registros = _consolidar_repetidos(cliente, categoria, _registros(dados.get(categoria)))
+        texto, incertos_categoria = _montar_categoria(categoria, registros)
         resultado[categoria] = texto
         incertos.extend(incertos_categoria)
     return resultado, incertos
@@ -294,8 +399,14 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
     revisado = {}
     for nome_comodo, dados_originais in resultados.items():
         dados_revisados = dados.get(nome_comodo, {})
-        revisado[nome_comodo] = {
-            categoria: str(dados_revisados.get(categoria, dados_originais.get(categoria, ""))).strip()
-            for categoria in CATEGORIAS
-        }
+        revisado[nome_comodo] = {}
+        for categoria in CATEGORIAS:
+            texto = str(dados_revisados.get(categoria, dados_originais.get(categoria, ""))).strip()
+            # Mesma correção automática da análise com fotos, caso a revisão
+            # também tenha escrito "Mais um/uma".
+            registros = [(linha, 100, "") for linha in texto.split("\n") if linha.strip()]
+            if any(linha_com_mais_um(linha) for linha, _, _ in registros):
+                registros = _consolidar_repetidos(cliente, categoria, registros)
+                texto = "\n".join(linha for linha, _, _ in registros)
+            revisado[nome_comodo][categoria] = texto
     return revisado

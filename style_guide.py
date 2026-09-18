@@ -40,8 +40,19 @@ regras de formatação:
   vir junto" (ex.: não escreva "roseta" só porque a porta tem maçaneta e
   fechadura, se a roseta em si não aparecer visível na imagem). Na
   dúvida sobre um componente específico, omita-o em vez de arriscar.
-- Se dois ou mais itens forem idênticos ou muito parecidos, agrupe usando
-  "Mais um/uma [item]..." em vez de repetir a descrição inteira.
+- ITENS REPETIDOS: quando houver mais de um item do MESMO tipo no cômodo,
+  escreva UMA ÚNICA linha com a quantidade total, no plural — nunca uma
+  linha por unidade. NUNCA use "Mais um", "Mais uma", "Mais dois" etc.
+  - Iguais: "*Duas portas em madeira na cor branca, tipo lisa, com
+    maçaneta cromada, em bom estado." (e não "*Uma porta..." seguida de
+    "*Mais uma porta...").
+  - Mesmo tipo, com algum detalhe diferente: continue numa linha só,
+    usando "sendo um/uma ... e outro/outra ...": "*Dois armários em MDF
+    nas cores marrom e bege, sendo um com quatro portas e outro com duas
+    portas, com dobradiças metálicas e interior na cor branca, em bom
+    estado."
+  - Itens de tipos DIFERENTES (ex.: bancada e tanque) ficam em linhas
+    separadas, cada uma começando com "Um/Uma" ou com a quantidade.
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um
   cômodo sem janela), responda apenas: "Não se aplica."
 - Vidro de box de banheiro: use sempre o termo "vidro Blindex" (nunca
@@ -122,9 +133,8 @@ Descreva os componentes elétricos visíveis do cômodo:
 - Pontos de iluminação: agrupe TODOS os pontos de iluminação do cômodo em
   UMA ÚNICA frase, informando a quantidade total e o tipo (ex.: "Três
   pontos de iluminação do tipo luminária de embutir em LED, na cor
-  branca, em bom estado."). NÃO repita "Mais um ponto de iluminação"
-  várias vezes — some tudo em um único item, mesmo que a exceção à regra
-  geral de "Mais um/uma [item]" acima.
+  branca, em bom estado."), mesmo que as luminárias sejam de tipos
+  diferentes ("...sendo duas de embutir e uma pendente...").
 - Tomadas/interruptores: descreva como "placas em polímero na cor [cor]",
   detalhando a função de cada uma (interruptores, tomadas, placas cegas,
   placas para saída de fios de internet/TV, etc.) e a quantidade de cada
@@ -314,4 +324,29 @@ def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str =
         "depois, sem markdown, sem ```json. Use \\n para separar linhas "
         "dentro do texto de cada categoria, sem linha em branco entre os "
         "itens."
+    )
+
+
+def montar_prompt_consolidacao(rotulo_categoria: str, texto_categoria: str) -> str:
+    """Prompt de TEXTO PURO (sem fotos, barato) para consertar uma categoria
+    que veio com linhas "Mais um/uma..." apesar da regra de ITENS
+    REPETIDOS. Só é usado quando o modelo desobedece — ver
+    gemini_client._consolidar_repetidos."""
+    return (
+        f"{_regras()}\n\n"
+        f'Abaixo estão as linhas da categoria "{rotulo_categoria}" de um '
+        "cômodo, já escritas, mas violando a regra de ITENS REPETIDOS (há "
+        'linhas começando com "Mais um", "Mais uma" etc.):\n\n'
+        f"{texto_categoria}\n\n"
+        "Reescreva essas linhas corrigindo SOMENTE isso:\n"
+        "- Linhas que descrevem o MESMO tipo de item viram uma linha só, com "
+        "a quantidade total no plural (e \"sendo um/uma ... e outro/outra "
+        '..." se algum detalhe for diferente entre eles).\n'
+        '- Se a linha com "Mais um/uma" descreve um item de tipo DIFERENTE '
+        'da linha anterior, apenas troque o começo por "Um/Uma".\n'
+        "- Não invente, não remova e não altere nenhum fato (material, cor, "
+        "quantidade, estado de conservação). Mantenha idênticas as linhas "
+        "que não precisam mudar.\n\n"
+        "Responda APENAS com um objeto JSON válido, sem markdown: "
+        '{"linhas": ["*...", "*..."]} — uma string por linha do laudo.'
     )

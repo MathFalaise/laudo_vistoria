@@ -108,6 +108,16 @@ faturamento ativo — ver "Decisões importantes").
   anterior do mesmo cômodo, com as mesmas fotos, tinha descrito uma janela
   de correr. Erro confiante não é pego por esse sistema: ele serve de
   triagem ("onde olhar primeiro"), não de garantia.
+- **"Mais um/uma" é proibido** (pedido explícito do vistoriador, depois de
+  aparecer em 3 laudos seguidos apesar da regra antiga). Item repetido vira
+  UMA linha com a quantidade total ("*Duas portas..."), com "sendo um...
+  e outro..." se algum detalhe diferir. Como só a regra no prompt já tinha
+  falhado antes, há três camadas: (1) a regra ITENS REPETIDOS em
+  `REGRAS_GERAIS`; (2) se ainda assim aparecer, `_consolidar_repetidos` faz
+  UMA chamada de texto puro só para aquela categoria (fração de centavo,
+  só quando o modelo desobedece); (3) o que sobrar vira pendência de
+  certeza 0 levando junto a linha anterior (`report_writer.linha_com_mais_um`
+  detecta). Vale na análise com fotos e no `revisar.py`.
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a
