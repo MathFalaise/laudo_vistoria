@@ -121,8 +121,20 @@ faturamento ativo — ver "Decisões importantes").
   `REGRAS_GERAIS`; (2) se ainda assim aparecer, `_consolidar_repetidos` faz
   UMA chamada de texto puro só para aquela categoria (fração de centavo,
   só quando o modelo desobedece); (3) o que sobrar vira pendência de
-  certeza 0 levando junto a linha anterior (`report_writer.linha_com_mais_um`
-  detecta). Vale na análise com fotos e no `revisar.py`.
+  certeza 0 com todas as linhas envolvidas. Vale na análise com fotos e no
+  `revisar.py`.
+  A detecção pega "Mais um/uma" (`linha_com_mais_um`) E o mesmo item em
+  linhas separadas sem "Mais" (`grupos_de_itens_repetidos`: linhas que
+  começam com quantidade + o mesmo substantivo). O segundo caso apareceu na
+  R. Leopoldo (8 placas em 4 linhas, 3 armários em 3 linhas) depois que o
+  "Mais um" sumiu. Posição/tamanho não fazem tipo diferente: armário
+  inferior e aéreo são "armários" (confirmado pelo vistoriador).
+  Os exemplos da regra usam [cor]/[n] de propósito: um exemplo tirado de
+  um imóvel real foi copiado palavra por palavra pelo modelo no teste.
+- **Testes:** só se escreve "testado" quando `--notas` confirma os testes
+  (o modelo não vê teste em foto). Com testes confirmados, todo item
+  elétrico e cada peça hidráulica levam "testado(s) e em funcionamento"
+  (pedido do vistoriador, 18/09/2026).
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a

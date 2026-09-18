@@ -15,6 +15,7 @@ from config import API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA, ROTULOS_CATE
 from report_writer import (
     TEXTO_NAO_SE_APLICA,
     TEXTO_SEM_OBSERVACOES,
+    grupos_de_itens_repetidos,
     linha_com_mais_um,
     normalizar_linha,
     texto_vazio_da_categoria,
@@ -34,10 +35,10 @@ ESPERA_BASE_SEGUNDOS = 10
 TEMPO_LIMITE_CHAMADA_SEGUNDOS = 300
 
 SEM_MOTIVO = "(o modelo não explicou)"
-MOTIVO_MAIS_UM = (
-    'item repetido escrito com "Mais um/uma", e a correção automática não '
-    "resolveu — troque as linhas por uma só, com a quantidade total (ex.: "
-    '"*Duas portas ...")'
+MOTIVO_REPETIDOS = (
+    'itens do mesmo tipo em linhas separadas (ou com "Mais um/uma"), e a '
+    "correção automática não resolveu — troque por uma linha só, com a "
+    'quantidade total (ex.: "*Duas portas ...", "*Três armários ..., sendo ...")'
 )
 
 
@@ -148,17 +149,23 @@ def _registros(itens) -> list:
     return registros
 
 
+def _tem_itens_repetidos(linhas: list) -> bool:
+    """A regra ITENS REPETIDOS foi violada: linha "Mais um/uma..." ou o
+    mesmo tipo de item em mais de uma linha."""
+    return any(linha_com_mais_um(linha) for linha in linhas) or bool(grupos_de_itens_repetidos(linhas))
+
+
 def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list) -> list:
-    """Conserta uma categoria que veio com "Mais um/uma" apesar da regra:
-    UMA chamada de texto puro (sem fotos — custa uma fração de centavo) que
-    junta os itens repetidos numa linha só. Só roda quando o modelo
-    desobedece.
+    """Conserta uma categoria que violou a regra ITENS REPETIDOS ("Mais
+    um/uma", ou o mesmo item em linhas separadas): UMA chamada de texto puro
+    (sem fotos — custa uma fração de centavo) que junta os itens repetidos
+    numa linha só. Só roda quando o modelo desobedece.
 
     Linhas que não mudaram mantêm a certeza original; linhas novas (as
     consolidadas) herdam a MENOR certeza entre as que sumiram. Se a chamada
     falhar, devolve os registros originais — a trava de _montar_categoria
     manda o que sobrar para validação."""
-    if not any(linha_com_mais_um(linha) for linha, _, _ in registros):
+    if not _tem_itens_repetidos([linha for linha, _, _ in registros]):
         return registros
 
     rotulo = ROTULOS_CATEGORIA[categoria]
@@ -174,17 +181,17 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
             [montar_prompt_consolidacao(rotulo, texto)],
             response_schema=schema,
             max_output_tokens=4096,
-            descricao_erro=f'a correção de "Mais um/uma" ({rotulo})',
+            descricao_erro=f"a correção de itens repetidos ({rotulo})",
         )
         novas = [normalizar_linha(str(linha)) for linha in _extrair_json(bruto).get("linhas", [])]
         novas = [linha for linha in novas if linha]
     except Exception as erro:
-        print(f'  Não consegui corrigir "Mais um/uma" em {rotulo} automaticamente ({erro.__class__.__name__}).')
+        print(f"  Não consegui juntar os itens repetidos em {rotulo} automaticamente ({erro.__class__.__name__}).", flush=True)
         return registros
     if not novas:
         return registros
 
-    print(f'  Corrigido automaticamente: "Mais um/uma" em {rotulo}.')
+    print(f"  Corrigido automaticamente: itens repetidos em {rotulo}.", flush=True)
     originais = {linha: (certeza, motivo) for linha, certeza, motivo in registros}
     sumiram = [registro for registro in registros if registro[0] not in novas]
     menos_certa = min(sumiram or registros, key=lambda registro: registro[1])
@@ -197,9 +204,11 @@ def _montar_categoria(categoria: str, registros: list) -> tuple:
     pendências. Devolve (texto, pendencias). Vira pendência:
 
     - linha com certeza abaixo de LIMIAR_CERTEZA;
-    - linha "Mais um/uma..." que sobreviveu à correção automática — com
-      certeza 0 e levando junto a linha anterior (o item que ela
-      "continua"), para o vistoriador trocar as duas por uma só.
+    - violação da regra ITENS REPETIDOS que sobreviveu à correção
+      automática — o mesmo item em várias linhas, ou "Mais um/uma..." (que
+      leva junto a linha anterior, o item que ela "continua"). Vira UMA
+      pendência de certeza 0 com todas as linhas envolvidas, para o
+      vistoriador trocar por uma linha só.
 
     O "texto" de uma pendência pode ter mais de uma linha."""
     vazio = texto_vazio_da_categoria(categoria)
@@ -228,48 +237,52 @@ def _montar_categoria(categoria: str, registros: list) -> tuple:
             "motivo": menos_certo[2] or SEM_MOTIVO,
         }]
 
-    pendencias = []
+    linhas = [linha for linha, _, _ in reais]
+
+    # Conjuntos de linhas que violam ITENS REPETIDOS: o mesmo item em
+    # várias linhas, e cada "Mais um/uma" com a linha anterior. Conjuntos
+    # que se tocam viram um só (ex.: "*Um armário" + "*Mais um armário").
+    problemas = [set(grupo) for grupo in grupos_de_itens_repetidos(linhas)]
+    problemas += [{i - 1, i} if i > 0 else {i} for i, linha in enumerate(linhas) if linha_com_mais_um(linha)]
+    unidos = []
+    for conjunto in problemas:
+        for outro in [u for u in unidos if u & conjunto]:
+            conjunto |= outro
+            unidos.remove(outro)
+        unidos.append(conjunto)
+
+    pendencias, cobertas = [], set()
+    for conjunto in unidos:
+        indices = sorted(conjunto)
+        cobertas |= conjunto
+        # Se alguma dessas linhas também era duvidosa, o motivo vai junto.
+        extras = list(dict.fromkeys(
+            reais[i][2] for i in indices if reais[i][1] < LIMIAR_CERTEZA and reais[i][2]
+        ))
+        motivo = MOTIVO_REPETIDOS + (f"; além disso: {'; '.join(extras)}" if extras else "")
+        pendencias.append((indices[0], {
+            "categoria": categoria,
+            "texto": "\n".join(linhas[i] for i in indices),
+            "certeza": 0,
+            "motivo": motivo,
+        }))
+
     for indice, (linha, certeza, motivo) in enumerate(reais):
-        ultima = pendencias[-1] if pendencias else None
-        encosta_na_ultima = ultima is not None and ultima["_ate"] == indice - 1
-        if linha_com_mais_um(linha):
-            if encosta_na_ultima:
-                # A linha anterior já é pendência: junta as duas numa só.
-                motivo_anterior = ultima["motivo"]
-                ultima["texto"] += "\n" + linha
-                ultima["certeza"] = 0
-                ultima["motivo"] = (
-                    MOTIVO_MAIS_UM
-                    if motivo_anterior in (MOTIVO_MAIS_UM, SEM_MOTIVO)
-                    else f"{MOTIVO_MAIS_UM}; além disso: {motivo_anterior}"
-                )
-                ultima["_ate"] = indice
-                continue
-            linhas = ([reais[indice - 1][0]] if indice > 0 else []) + [linha]
-            pendencias.append({
-                "categoria": categoria,
-                "texto": "\n".join(linhas),
-                "certeza": 0,
-                "motivo": MOTIVO_MAIS_UM,
-                "_ate": indice,
-            })
-        elif certeza < LIMIAR_CERTEZA:
-            pendencias.append({
+        if indice not in cobertas and certeza < LIMIAR_CERTEZA:
+            pendencias.append((indice, {
                 "categoria": categoria,
                 "texto": linha,
                 "certeza": certeza,
                 "motivo": motivo or SEM_MOTIVO,
-                "_ate": indice,
-            })
+            }))
 
-    for pendencia in pendencias:
-        del pendencia["_ate"]
-    return "\n".join(linha for linha, _, _ in reais), pendencias
+    pendencias.sort(key=lambda par: par[0])
+    return "\n".join(linhas), [pendencia for _, pendencia in pendencias]
 
 
-def pendencias_mais_um(categoria: str, texto: str) -> list:
-    """Pendências de linhas "Mais um/uma" num texto já pronto (sem
-    certeza) — usado pelo revisar.py depois da revisão."""
+def pendencias_itens_repetidos(categoria: str, texto: str) -> list:
+    """Pendências de violação da regra ITENS REPETIDOS num texto já pronto
+    (sem certeza) — usado pelo revisar.py depois da revisão."""
     registros = [(linha, 100, "") for linha in texto.split("\n") if linha.strip()]
     return _montar_categoria(categoria, registros)[1] if registros else []
 
@@ -417,7 +430,7 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
             # Mesma correção automática da análise com fotos, caso a revisão
             # também tenha escrito "Mais um/uma".
             registros = [(linha, 100, "") for linha in texto.split("\n") if linha.strip()]
-            if any(linha_com_mais_um(linha) for linha, _, _ in registros):
+            if _tem_itens_repetidos([linha for linha, _, _ in registros]):
                 registros = _consolidar_repetidos(cliente, categoria, registros)
                 texto = "\n".join(linha for linha, _, _ in registros)
             revisado[nome_comodo][categoria] = texto

@@ -51,8 +51,25 @@ regras de formatação:
     nas cores marrom e bege, sendo um com quatro portas e outro com duas
     portas, com dobradiças metálicas e interior na cor branca, em bom
     estado."
+  - Posição, tamanho ou função NÃO fazem um tipo diferente: armário
+    inferior, superior, aéreo e de canto são todos "armários"; placa de
+    tomada, de interruptor e placa cega são todas "placas". Ex.: "*Dois
+    armários em MDF na cor [cor], sendo um inferior com [n] portas e
+    outro aéreo com [n] portas, em bom estado."
   - Itens de tipos DIFERENTES (ex.: bancada e tanque) ficam em linhas
     separadas, cada uma começando com "Um/Uma" ou com a quantidade.
+- TESTES: só escreva que algo foi "testado" se as informações confirmadas
+  do imóvel disserem que os testes foram feitos — você não vê o teste na
+  foto (no máximo, "aceso" se a luz aparecer acesa). Quando as notas
+  confirmarem os testes ELÉTRICOS, todo item de Componentes Elétricos
+  (pontos de iluminação, placas, quadro de disjuntores) leva "testado(s)
+  e em funcionamento" antes de "em bom estado", com a concordância certa
+  ("*Três placas ..., testadas e em funcionamento, em bom estado.").
+  Quando confirmarem os testes HIDRÁULICOS, faça o mesmo com cada peça
+  hidráulica (torneira, misturador, chuveiro, ducha, ducha higiênica,
+  descarga, registro, tanque), logo depois da peça dentro da linha:
+  "...torneira monocomando em metal cromado, testada e em funcionamento,
+  sifão em PVC...".
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um
   cômodo sem janela), responda apenas: "Não se aplica."
 - Vidro de box de banheiro: use sempre o termo "vidro Blindex" (nunca
@@ -138,12 +155,14 @@ Descreva os componentes elétricos visíveis do cômodo:
   pontos de iluminação do tipo luminária de embutir em LED, na cor
   branca, em bom estado."), mesmo que as luminárias sejam de tipos
   diferentes ("...sendo duas de embutir e uma pendente...").
-- Tomadas/interruptores: descreva como "placas em polímero na cor [cor]",
-  detalhando a função de cada uma (interruptores, tomadas, placas cegas,
-  placas para saída de fios de internet/TV, etc.) e a quantidade de cada
-  tipo — não use o termo "espelhos" para as placas.
-- Disjuntores/quadro de disjuntores, se visíveis, informando se foram
-  testados e se estão funcionando.
+- Tomadas/interruptores: TODAS as placas do cômodo numa ÚNICA linha, como
+  "placas em polímero na cor [cor]", com a quantidade total e a função de
+  cada uma (interruptores, tomadas, placas cegas, placas para saída de
+  fios de internet/TV, etc.) — ex.: "*Cinco placas em polímero na cor
+  branca, sendo duas com uma tomada, uma com um interruptor triplo e duas
+  placas cegas, em bom estado." Não use o termo "espelhos" para as placas.
+- Disjuntores/quadro de disjuntores, se visíveis (sobre dizer que foram
+  testados, siga a regra TESTES acima).
 - Estado de conservação geral dos itens acima.
 """,
     "mobilia": """
@@ -354,19 +373,22 @@ def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str =
 
 def montar_prompt_consolidacao(rotulo_categoria: str, texto_categoria: str) -> str:
     """Prompt de TEXTO PURO (sem fotos, barato) para consertar uma categoria
-    que veio com linhas "Mais um/uma..." apesar da regra de ITENS
-    REPETIDOS. Só é usado quando o modelo desobedece — ver
+    que violou a regra de ITENS REPETIDOS (o mesmo item em várias linhas, ou
+    "Mais um/uma..."). Só é usado quando o modelo desobedece — ver
     gemini_client._consolidar_repetidos."""
     return (
         f"{_regras()}\n\n"
         f'Abaixo estão as linhas da categoria "{rotulo_categoria}" de um '
-        "cômodo, já escritas, mas violando a regra de ITENS REPETIDOS (há "
-        'linhas começando com "Mais um", "Mais uma" etc.):\n\n'
+        "cômodo, já escritas, mas violando a regra de ITENS REPETIDOS (o "
+        "mesmo tipo de item aparece em mais de uma linha, e/ou há linhas "
+        'começando com "Mais um", "Mais uma" etc.):\n\n'
         f"{texto_categoria}\n\n"
         "Reescreva essas linhas corrigindo SOMENTE isso:\n"
         "- Linhas que descrevem o MESMO tipo de item viram uma linha só, com "
         "a quantidade total no plural (e \"sendo um/uma ... e outro/outra "
-        '..." se algum detalhe for diferente entre eles).\n'
+        '..." se algum detalhe for diferente entre eles). Posição, tamanho '
+        "ou função não fazem um tipo diferente (armário inferior e superior "
+        "são armários; placa de tomada e placa cega são placas).\n"
         '- Se a linha com "Mais um/uma" descreve um item de tipo DIFERENTE '
         'da linha anterior, apenas troque o começo por "Um/Uma".\n'
         "- Não invente, não remova e não altere nenhum fato (material, cor, "

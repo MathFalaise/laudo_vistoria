@@ -6,6 +6,7 @@ com o imóvel inteiro.
 
 import os
 import re
+import unicodedata
 
 from config import CATEGORIAS, ROTULOS_CATEGORIA
 
@@ -46,6 +47,40 @@ _MAIS_UM = re.compile(
 
 def linha_com_mais_um(linha: str) -> bool:
     return bool(_MAIS_UM.match(linha))
+
+
+# Linha que começa com quantidade + o item: "*Um armário...", "*Três placas...",
+# "*Mais um armário...". O grupo 2 é o item.
+_QUANTIDADE_E_ITEM = re.compile(
+    r"^\*\s*(?:mais\s+)?(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove"
+    r"|dez|onze|doze|\d+)\s+(\S+)",
+    re.IGNORECASE,
+)
+
+
+def _item_no_singular(palavra: str) -> str:
+    """"Armários" -> "armario", "placas" -> "placa", "painéis" -> "painel".
+    Aproximado, mas suficiente para comparar o item de duas linhas."""
+    palavra = unicodedata.normalize("NFKD", palavra.strip(",.;:").lower())
+    palavra = palavra.encode("ascii", "ignore").decode()
+    for plural, singular in (("oes", "ao"), ("aes", "ao"), ("ais", "al"), ("eis", "el")):
+        if palavra.endswith(plural):
+            return palavra[: -len(plural)] + singular
+    return palavra[:-1] if palavra.endswith("s") else palavra
+
+
+def grupos_de_itens_repetidos(linhas: list) -> list:
+    """Índices de linhas que descrevem o MESMO tipo de item em linhas
+    separadas — "*Um armário inferior..." e "*Um armário superior...",
+    "*Duas placas..." e "*Uma placa..." — em grupos de 2 ou mais. Pela regra
+    ITENS REPETIDOS, cada grupo devia ser uma linha só. Linhas que não
+    começam com quantidade ("*Paredes em...", "*Piso em...") ficam de fora."""
+    por_item = {}
+    for indice, linha in enumerate(linhas):
+        encontrado = _QUANTIDADE_E_ITEM.match(linha)
+        if encontrado:
+            por_item.setdefault(_item_no_singular(encontrado.group(1)), []).append(indice)
+    return [indices for indices in por_item.values() if len(indices) > 1]
 
 
 def montar_texto_comodo(nome_comodo: str, dados: dict) -> str:
