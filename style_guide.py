@@ -94,12 +94,11 @@ INSTRUCAO_CATEGORIA = {
 Descreva as paredes do cômodo: material/acabamento (pintura, revestimento,
 papel de parede, textura), cor(es) e estado de conservação (trincas,
 manchas, bolhas, desgaste). Não descreva móveis nem outros itens.
+O RODAPÉ NÃO entra aqui — ele é descrito na categoria Piso.
 Use sempre uma destas fórmulas fixas de abertura de frase, conforme o
 acabamento (nunca varie a fórmula para o mesmo tipo de acabamento):
-- Parede pintada lisa, sem outro detalhe: "Paredes em pintura lisa na cor
-  [cor], em bom estado."
-- Parede pintada lisa com rodapé: "Paredes em pintura lisa na cor [cor],
-  com rodapé em [material] na cor [cor], em bom estado."
+- Parede pintada lisa: "Paredes em pintura lisa na cor [cor], em bom
+  estado."
 - Parede com revestimento cerâmico: "Paredes em revestimento cerâmico na
   cor [cor], em bom estado." (acrescente ", com rejunte na cor [cor]," se
   o rejunte for visível e de cor diferente do revestimento).
@@ -107,7 +106,11 @@ acabamento (nunca varie a fórmula para o mesmo tipo de acabamento):
     "piso": """
 Descreva o piso do cômodo: material (porcelanato, laminado, cerâmica,
 vinílico, etc.), cor e padrão (se houver), e estado de conservação
-(riscos, trincas, desgaste, rejunte).
+(riscos, trincas, quebras, afundamentos, desgaste, rejunte).
+O RODAPÉ é descrito AQUI, junto com o piso (nunca em Paredes):
+"Piso em [material] na cor [cor], com rodapé em [material] na cor [cor],
+em bom estado." Se o cômodo não tiver rodapé (ex.: parede com
+revestimento cerâmico até o chão), não invente um.
 """,
     "teto": """
 Descreva o teto do cômodo. A estrutura do teto em si é sempre de laje/
@@ -150,6 +153,28 @@ número exato de portas/gavetas, se são espelhadas ou de vidro, cor do
 interior das gavetas, tipo de puxador, se dobradiças e corrediças são
 cromadas, e estado de conservação. NÃO descreva paredes, piso, teto,
 janelas, portas de acesso ou eletrodomésticos soltos — apenas mobília.
+
+BANHEIROS E LAVABOS: aqui a mobília inclui TODAS as louças, metais e
+acessórios fixos — bancada, cuba, torneira/misturador, sifão, gabinete,
+nicho, espelho, bacia sanitária (com ou sem caixa acoplada, assento e
+tampa, acionamento), box (vidro Blindex), chuveiro/ducha, ducha
+higiênica, registros e acessórios (porta-toalha, porta-papel,
+saboneteira, cabides/ganchos). Chuveiro e ducha higiênica entram AQUI,
+nunca em Componentes Elétricos. Descreva cada peça que aparecer nas
+fotos, com material, cor e quantidade — é a parte do laudo de banheiro
+que mais recebe atenção. Exemplo validado de mobília de banheiro:
+
+*Uma bancada em granito na cor preta, com cuba de apoio retangular em
+louça na cor branca, torneira e misturador em metal cromado, em bom estado.
+*Um nicho suspenso em MDF na cor bege, com compartimento aberto, em bom
+estado.
+*Um espelho retangular fixado na parede sobre a bancada, em bom estado.
+*Um box de banheiro com folhas em vidro Blindex incolor, trilho e puxador
+em alumínio na cor prata, em bom estado.
+*Uma bacia sanitária com caixa acoplada em louça na cor branca, assento e
+tampa plásticos na cor branca e engate flexível metálico, em bom estado.
+*Um porta-papel higiênico em metal cromado, em bom estado.
+*Quatro ganchos cabideiros em metal cromado, em bom estado.
 """
     + EXEMPLOS_MOBILIA,
     "obs": """
