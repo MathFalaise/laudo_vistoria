@@ -5,14 +5,13 @@ Configurações gerais do gerador automático de laudo de vistoria.
 import os
 
 # Chave de API do Google Gemini (defina como variável de ambiente GEMINI_API_KEY).
-# Gratuita: gere em https://aistudio.google.com/apikey, sem cartão de crédito.
+# Gerada em https://aistudio.google.com/apikey. O projeto da chave precisa
+# estar na camada PAGA (dados de clientes) — ver CLAUDE.md.
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Modelo Gemini usado para leitura das fotos (precisa suportar visão).
-# gemini-3.5-flash-lite: testado com dados reais em 11/09/2026. O
-# gemini-3.6-flash tem cota GRATUITA de só 20 requisições/dia por projeto
-# (esgota no meio de um único imóvel) — o flash-lite tem cota bem mais
-# folgada e qualidade equivalente nos testes feitos.
+# gemini-3.5-flash-lite: qualidade equivalente ao 3.6-flash nos testes com
+# dados reais (11/09/2026) e entrada 5x mais barata — ver CLAUDE.md.
 MODEL_NAME = "gemini-3.5-flash-lite"
 
 # Extensões de imagem aceitas dentro das pastas de cômodo

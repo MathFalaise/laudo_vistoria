@@ -2,7 +2,7 @@
 
 Gerador automático de laudo de vistoria de entrada de imóvel residencial,
 a partir de fotos organizadas por cômodo. Usa a API de visão do Google
-Gemini (camada gratuita) para descrever cada cômodo em 8 categorias e
+Gemini (camada paga) para descrever cada cômodo em 8 categorias e
 grava o resultado em arquivos `.txt`.
 
 ## Uso
@@ -15,8 +15,8 @@ A pasta do imóvel deve conter uma subpasta por cômodo, cada uma com as
 fotos daquele cômodo (`.jpg`, `.jpeg`, `.png`, `.heic`).
 
 Requer a variável de ambiente `GEMINI_API_KEY` definida antes de rodar
-(chave gratuita, sem cartão de crédito, gerada em
-https://aistudio.google.com/apikey).
+(gerada em https://aistudio.google.com/apikey, num projeto com
+faturamento ativo — ver "Decisões importantes").
 
 ## Arquitetura
 
@@ -50,22 +50,29 @@ https://aistudio.google.com/apikey).
 
 ## Decisões importantes
 
-- Desde set/2026 o motor é o **Google Gemini**, não mais a Anthropic —
-  troca feita para eliminar custo, já que a API do Gemini tem camada
-  gratuita (sem cartão de crédito) para esse volume de uso. Se um dia
-  precisar trocar de novo, os únicos arquivos acoplados ao SDK são
+- Desde set/2026 o motor é o **Google Gemini**, não mais a Anthropic. Se
+  um dia precisar trocar de novo, os únicos arquivos acoplados ao SDK são
   `image_utils.py` (monta `types.Part`) e `gemini_client.py` (chama
   `client.models.generate_content`); o resto do projeto é agnóstico de
   provedor.
-- **Escolha de modelo é sensível à cota gratuita, não só à qualidade.**
-  Testado em 11/09/2026 com um imóvel real (11 cômodos): `gemini-3.6-flash`
-  tem cota gratuita de só **20 requisições/dia por projeto** (não por
-  chave — gerar uma chave nova não reseta) e estourou no meio de uma única
-  vistoria. `gemini-3.5-flash-lite` teve cota bem mais folgada e qualidade
-  equivalente nos testes, por isso é o padrão em `config.MODEL_NAME`. Se
-  trocar de modelo de novo, confirme a cota gratuita atual antes (a cota
-  por modelo muda com frequência — ver aistudio.google.com/rate-limit) e
-  rode um teste real de ponta a ponta, não só um `models.list()`.
+- **O projeto do Gemini TEM que ficar na camada paga** (faturamento ativo
+  desde 18/09/2026 — Nível 1, pré-pagamento). Motivo: os termos da camada
+  gratuita permitem que o Google use o conteúdo enviado para melhorar
+  produtos, com revisão humana, e pedem explicitamente para não enviar
+  informação pessoal ou confidencial — e este script envia fotos do
+  interior de imóveis de clientes (LGPD). Na camada paga, o Google não usa
+  prompts nem arquivos para isso. Custo medido: ~US$ 0,14 na maior
+  vistoria até agora (11 cômodos, 358 fotos, ~420 mil tokens de entrada) —
+  não vale voltar para a gratuita para economizar isso. Para conferir:
+  aistudio.google.com/projects, coluna "Nível de faturamento".
+- `gemini-3.5-flash-lite` é o padrão em `config.MODEL_NAME`. Foi escolhido
+  em 11/09/2026, ainda na camada gratuita, porque o `gemini-3.6-flash` tinha
+  cota de só 20 requisições/dia por projeto e estourou no meio de uma
+  vistoria. Na camada paga essa limitação some, mas o flash-lite continua
+  sendo o padrão: qualidade equivalente nos testes com dados reais e
+  entrada 5× mais barata (US$ 0,30 vs. US$ 1,50 por milhão de tokens). Se
+  trocar de modelo, rode um teste real de ponta a ponta, não só um
+  `models.list()`.
 - `gemini_client.analisar_comodo` já tenta de novo automaticamente (com
   espera crescente) quando o Gemini responde `503` (sobrecarga do
   servidor — comum e transitório). Cota estourada (`429`) não tem nova

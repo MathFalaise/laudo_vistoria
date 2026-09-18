@@ -1,5 +1,5 @@
 """
-Camada fina sobre a API do Google Gemini (camada gratuita): envia as fotos
+Camada fina sobre a API do Google Gemini: envia as fotos
 de um cômodo + o prompt com as 8 categorias e retorna o texto gerado em JSON.
 """
 
@@ -24,7 +24,8 @@ def criar_cliente() -> genai.Client:
     if not API_KEY:
         raise RuntimeError(
             "Defina a variável de ambiente GEMINI_API_KEY antes de rodar o script "
-            "(gere uma chave gratuita em https://aistudio.google.com/apikey)."
+            "(gere uma em https://aistudio.google.com/apikey, num projeto com "
+            "faturamento ativo — ver CLAUDE.md)."
         )
     return genai.Client(api_key=API_KEY)
 
@@ -160,7 +161,7 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
     revisão de TEXTO PURO — sem fotos — pra padronizar terminologia e
     formatação conforme o style_guide atual. Usada por revisar.py quando o
     padrão de escrita muda depois que o laudo já foi gerado com as fotos,
-    evitando gastar cota de API reanalisando imagens.
+    evitando reenviar as imagens (custo e tempo).
 
     `resultados` é {nome_comodo: {categoria: texto}}; devolve no mesmo
     formato, com o texto revisado."""
