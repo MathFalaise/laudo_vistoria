@@ -9,6 +9,7 @@ grava o resultado em arquivos `.txt`.
 
 ```bash
 python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
+python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
 python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
 python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
 ```
@@ -88,14 +89,18 @@ faturamento ativo — ver "Decisões importantes").
   entrada 5× mais barata (US$ 0,30 vs. US$ 1,50 por milhão de tokens). Se
   trocar de modelo, rode um teste real de ponta a ponta, não só um
   `models.list()`.
-- `gemini_client.analisar_comodo` já tenta de novo automaticamente (com
-  espera crescente) quando o Gemini responde `503` (sobrecarga do
-  servidor — comum e transitório). Cota estourada (`429`) não tem nova
-  tentativa automática — não adianta, o request tem que esperar o reset
-  da cota ou trocar de modelo.
+- Toda chamada ao Gemini tem tempo limite de 5 min
+  (`TEMPO_LIMITE_CHAMADA_SEGUNDOS`) e tenta de novo, com espera crescente,
+  em `503` (sobrecarga do servidor) e em falha de rede/tempo limite
+  (`httpx.TransportError`). Sem o tempo limite, em 18/09/2026 uma conexão
+  pendurada pelo servidor travou o script por 10+ min sem erro nenhum.
+  Cota estourada (`429`) não tem nova tentativa automática — não adianta.
 - `main.py` isola falha por cômodo: se um cômodo der erro mesmo após as
-  tentativas, o script segue para o próximo em vez de derrubar o laudo
-  inteiro, e lista no final quais cômodos precisam rodar de novo.
+  tentativas, o script segue para o próximo e, no fim, mostra o comando
+  pronto com `--comodos` para refazer só os que falharam. As pendências
+  são gravadas a cada cômodo (não só no fim), para uma interrupção não
+  perder o trabalho feito; e o consolidado é montado de TODOS os
+  `_vistoria.txt` no disco, inclusive dos cômodos não reprocessados.
 - **Sistema de certeza (desde 18/09/2026):** cada item do laudo vem com
   uma certeza 0–100 dada pelo próprio modelo; abaixo de
   `config.LIMIAR_CERTEZA` (85) vira pendência para o vistoriador conferir.

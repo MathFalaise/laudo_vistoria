@@ -7,6 +7,7 @@ import json
 import re
 import time
 
+import httpx
 from google import genai
 from google.genai import errors, types
 
@@ -20,11 +21,17 @@ from report_writer import (
 )
 from style_guide import montar_prompt_comodo, montar_prompt_consolidacao, montar_prompt_revisao
 
-# Nº de tentativas extras e espera entre elas quando o Gemini responde
-# 503 (servidor sobrecarregado) — esse erro é comum e quase sempre
-# transitório; a própria API pede pra tentar de novo mais tarde.
+# Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
+# sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
+# inclusive o tempo limite abaixo estourar.
 MAX_TENTATIVAS = 4
 ESPERA_BASE_SEGUNDOS = 10
+
+# Tempo máximo de espera por UMA chamada. Sem isso, uma conexão que o
+# servidor deixou pendurada trava o script para sempre — aconteceu em
+# 18/09/2026, com o processo parado 10+ minutos esperando resposta. O
+# cômodo mais lento já medido levou ~2 min (51 fotos); 5 min é folga.
+TEMPO_LIMITE_CHAMADA_SEGUNDOS = 300
 
 SEM_MOTIVO = "(o modelo não explicou)"
 MOTIVO_MAIS_UM = (
@@ -41,7 +48,10 @@ def criar_cliente() -> genai.Client:
             "(gere uma em https://aistudio.google.com/apikey, num projeto com "
             "faturamento ativo — ver CLAUDE.md)."
         )
-    return genai.Client(api_key=API_KEY)
+    return genai.Client(
+        api_key=API_KEY,
+        http_options=types.HttpOptions(timeout=TEMPO_LIMITE_CHAMADA_SEGUNDOS * 1000),
+    )
 
 
 def _extrair_json(texto: str) -> dict:
@@ -289,14 +299,16 @@ def _gerar_com_retry(
                 ),
             )
             break
-        except errors.ServerError as erro:
+        except (errors.ServerError, httpx.TransportError) as erro:
+            # TransportError cobre o tempo limite estourado e quedas de rede.
             if tentativa == MAX_TENTATIVAS:
                 raise
             espera = ESPERA_BASE_SEGUNDOS * tentativa
             print(
-                f"  Servidor do Gemini indisponível para {descricao_erro} "
+                f"  Falha transitória no Gemini para {descricao_erro} "
                 f"({erro.__class__.__name__}), tentativa {tentativa}/{MAX_TENTATIVAS}. "
-                f"Aguardando {espera}s..."
+                f"Aguardando {espera}s...",
+                flush=True,
             )
             time.sleep(espera)
 

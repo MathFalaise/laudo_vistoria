@@ -14,7 +14,7 @@ import os
 from config import LIMIAR_CERTEZA, ROTULOS_CATEGORIA
 from gemini_client import criar_cliente
 from room_processor import processar_comodo
-from report_writer import salvar_txt_comodo, salvar_relatorio_completo
+from report_writer import parsear_txt_comodo, salvar_txt_comodo, salvar_relatorio_completo
 from validacao import ler_pendencias, salvar_pendencias
 
 
@@ -55,18 +55,38 @@ def main():
             "pela foto. Aplicada a todos os cômodos desta execução."
         ),
     )
+    parser.add_argument(
+        "--comodos",
+        nargs="+",
+        metavar="NOME",
+        help=(
+            "Processa só estes cômodos (nomes exatos das subpastas), ex.: "
+            '--comodos "Quarto 01" "Sala". Os demais mantêm o laudo e as '
+            "pendências que já têm."
+        ),
+    )
     args = parser.parse_args()
 
-    cliente = criar_cliente()
-    nomes_comodo = listar_pastas_comodo(args.pasta_imovel)
-
-    if not nomes_comodo:
+    todos = listar_pastas_comodo(args.pasta_imovel)
+    if not todos:
         print("Nenhuma subpasta de cômodo encontrada dentro da pasta informada.")
         return
+    nomes_comodo = todos
+    if args.comodos:
+        desconhecidos = [nome for nome in args.comodos if nome not in todos]
+        if desconhecidos:
+            print(f"Cômodo(s) não encontrado(s): {', '.join(desconhecidos)}")
+            print(f"Cômodos desta pasta: {', '.join(todos)}")
+            return
+        nomes_comodo = [nome for nome in todos if nome in args.comodos]
 
-    resultados = {}
-    pendencias = []
-    falhas = []
+    cliente = criar_cliente()
+
+    # Pendências já existentes de cômodos que NÃO forem reprocessados
+    # continuam valendo — o laudo deles não muda.
+    iniciais = ler_pendencias(args.pasta_imovel)
+    processados, pendencias, falhas = set(), [], []
+    caminho_pendencias = None
     for nome_comodo in nomes_comodo:
         pasta_comodo = os.path.join(args.pasta_imovel, nome_comodo)
         try:
@@ -74,31 +94,40 @@ def main():
         except Exception as erro:
             # Um cômodo problemático não deve derrubar o laudo inteiro dos
             # outros — registra a falha e segue para o próximo cômodo.
-            print(f"  ERRO ao processar '{nome_comodo}': {erro}")
+            print(f"  ERRO ao processar '{nome_comodo}': {erro}", flush=True)
             falhas.append(nome_comodo)
             continue
         if not dados:
             continue
         caminho_txt = salvar_txt_comodo(pasta_comodo, nome_comodo, dados)
-        print(f"  Salvo: {caminho_txt}")
+        print(f"  Salvo: {caminho_txt}", flush=True)
         if incertos:
-            print(f"  {len(incertos)} item(ns) com certeza abaixo de {LIMIAR_CERTEZA}%")
-        resultados[nome_comodo] = dados
+            print(f"  {len(incertos)} item(ns) com certeza abaixo de {LIMIAR_CERTEZA}%", flush=True)
+        processados.add(nome_comodo)
         pendencias.extend(dict(item, comodo=nome_comodo) for item in incertos)
+        # Grava a cada cômodo, não só no fim: se o processo cair ou for
+        # interrompido no meio, as pendências já feitas não se perdem.
+        anteriores = [p for p in iniciais if p.get("comodo") not in processados]
+        caminho_pendencias = salvar_pendencias(args.pasta_imovel, anteriores + pendencias)
 
-    if resultados:
+    if processados:
+        # O consolidado sai de TODOS os cômodos com laudo no disco — inclusive
+        # os que não foram reprocessados agora (--comodos, ou que falharam).
+        resultados = {}
+        for nome_comodo in todos:
+            caminho_txt = os.path.join(args.pasta_imovel, nome_comodo, f"{nome_comodo}_vistoria.txt")
+            if os.path.isfile(caminho_txt):
+                resultados[nome_comodo] = parsear_txt_comodo(caminho_txt)
         caminho_completo = salvar_relatorio_completo(args.pasta_imovel, resultados)
         print(f"\nLaudo completo salvo em: {caminho_completo}")
 
-        # Pendências de rodadas anteriores de cômodos que NÃO foram
-        # reprocessados agora (ex.: falharam) continuam valendo — o laudo
-        # deles não mudou.
-        anteriores = [p for p in ler_pendencias(args.pasta_imovel) if p.get("comodo") not in resultados]
-        caminho_pendencias = salvar_pendencias(args.pasta_imovel, anteriores + pendencias)
+        anteriores = [p for p in iniciais if p.get("comodo") not in processados]
         _avisar_pendencias(anteriores + pendencias, caminho_pendencias, args.pasta_imovel)
 
     if falhas:
-        print(f"\nCômodos que falharam e precisam ser rodados de novo: {', '.join(falhas)}")
+        comodos = " ".join(f'"{nome}"' for nome in falhas)
+        print(f"\nCômodos que falharam: {', '.join(falhas)}")
+        print(f'Para rodar só eles:  python main.py "{args.pasta_imovel}" --comodos {comodos}')
 
 
 if __name__ == "__main__":
