@@ -46,6 +46,24 @@ def _extrair_json(texto: str) -> dict:
     return dados
 
 
+# Quantos caracteres da resposta do modelo entram na mensagem de erro.
+# O suficiente pra depurar um JSON malformado, sem despejar o laudo
+# inteiro (descrição do imóvel do cliente) num traceback que pode acabar
+# colado em e-mail, issue ou canal de suporte.
+LIMITE_TRECHO_ERRO = 300
+
+
+def _trecho_para_erro(texto: str) -> str:
+    """Devolve só o começo da resposta do modelo, para mensagens de erro."""
+    if not texto:
+        return "(resposta vazia)"
+    texto = texto.strip()
+    if len(texto) <= LIMITE_TRECHO_ERRO:
+        return texto
+    omitidos = len(texto) - LIMITE_TRECHO_ERRO
+    return f"{texto[:LIMITE_TRECHO_ERRO]}... [+{omitidos} caracteres omitidos]"
+
+
 def _schema_categorias(categorias: list) -> types.Schema:
     """Monta o response_schema que força o modelo a devolver um objeto
     JSON plano com uma chave string por categoria, evitando que a
@@ -131,7 +149,7 @@ def analisar_comodo(
         raise RuntimeError(
             f"Não foi possível interpretar a resposta do modelo como JSON "
             f"para o cômodo '{nome_comodo}'. Erro: {erro}\n\n"
-            f"Resposta recebida:\n{texto_bruto}"
+            f"Início da resposta recebida:\n{_trecho_para_erro(texto_bruto)}"
         ) from erro
 
     return {categoria: str(dados.get(categoria, "")).strip() for categoria in CATEGORIAS}
@@ -172,7 +190,8 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
     except (json.JSONDecodeError, ValueError) as erro:
         raise RuntimeError(
             "Não foi possível interpretar a resposta da revisão como JSON. "
-            f"Erro: {erro}\n\nResposta recebida:\n{texto_bruto}"
+            f"Erro: {erro}\n\nInício da resposta recebida:\n"
+            f"{_trecho_para_erro(texto_bruto)}"
         ) from erro
 
     revisado = {}
