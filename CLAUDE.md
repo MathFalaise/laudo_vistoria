@@ -8,11 +8,17 @@ grava o resultado em arquivos `.txt`.
 ## Uso
 
 ```bash
-python main.py "C:\caminho\para\o\imovel"
+python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
+python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
+python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
 ```
 
 A pasta do imóvel deve conter uma subpasta por cômodo, cada uma com as
 fotos daquele cômodo (`.jpg`, `.jpeg`, `.png`, `.heic`).
+
+Nessa ordem: `revisar.py` reescreve o texto dos itens, e pendências em
+aberto deixariam de bater com o laudo — por isso ele se recusa a rodar se
+houver pendência aberta (a não ser com `--ignorar-pendencias`).
 
 Requer a variável de ambiente `GEMINI_API_KEY` definida antes de rodar
 (gerada em https://aistudio.google.com/apikey, num projeto com
@@ -34,10 +40,19 @@ faturamento ativo — ver "Decisões importantes").
   `google-genai`, prontos para entrar no `contents` da mensagem da API.
 - **gemini_client.py** — camada fina sobre a API do Google Gemini:
   `analisar_comodo` envia as fotos + o prompt do cômodo, faz **1 única
-  chamada de API por cômodo** (com `response_mime_type="application/json"`
-  forçando saída em JSON) e faz o parse da resposta (`_extrair_json`,
-  tolerante a texto embrulhado em ```` ```json ```` como camada extra de
-  segurança).
+  chamada de API por cômodo** e devolve `(dados, incertos)`: o texto de
+  cada categoria e a lista de itens com certeza abaixo de
+  `config.LIMIAR_CERTEZA`. O `response_schema` pede cada categoria como
+  lista de itens `{texto, motivo, certeza}`, nessa ordem (o modelo escreve
+  o item, diz o que é duvidoso e só depois dá a nota).
+- **validacao.py** — formato do `Pendencias_Validacao.txt` (gravado na
+  pasta do imóvel, tem dado de cliente), leitura das decisões do
+  vistoriador (OK / CORRIGIR / REMOVER), aplicação nos `.txt` dos cômodos e
+  adoção das regras gerais em `regras_validadas.txt`.
+- **validar.py** — CLI do fluxo acima; reconstrói o laudo consolidado.
+- **regras_validadas.txt** — regras gerais adotadas pelo vistoriador;
+  `style_guide._regras()` injeta no prompt de toda vistoria e da revisão.
+  Fica no repositório PÚBLICO: só regra de redação, nunca dado de cliente.
 - **room_processor.py** — orquestra o processamento de um cômodo: lê as
   fotos e chama `analisar_comodo`. Aceita `notas_extras` opcional
   (informação confirmada sobre o imóvel, ex.: cor exata de tinta) que é
@@ -81,6 +96,22 @@ faturamento ativo — ver "Decisões importantes").
 - `main.py` isola falha por cômodo: se um cômodo der erro mesmo após as
   tentativas, o script segue para o próximo em vez de derrubar o laudo
   inteiro, e lista no final quais cômodos precisam rodar de novo.
+- **Sistema de certeza (desde 18/09/2026):** cada item do laudo vem com
+  uma certeza 0–100 dada pelo próprio modelo; abaixo de
+  `config.LIMIAR_CERTEZA` (85) vira pendência para o vistoriador conferir.
+  O limiar fica SÓ no código, nunca no prompt — se o modelo souber o corte,
+  tende a responder logo acima dele. Os itens incertos continuam no laudo
+  (a lista é de conferência, não de exclusão).
+  **Limitação comprovada:** a certeza é autoavaliação, não probabilidade
+  medida. No primeiro teste real (Churrasqueira da R. Xavier), o modelo
+  deu ≥85% para TUDO — inclusive "Janela: Não se aplica.", quando a rodada
+  anterior do mesmo cômodo, com as mesmas fotos, tinha descrito uma janela
+  de correr. Erro confiante não é pego por esse sistema: ele serve de
+  triagem ("onde olhar primeiro"), não de garantia.
+- Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
+  Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
+  CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a
+  achar que nenhuma cozinha tem porta.
 - Cada cômodo gera **apenas 1 chamada de API** (antes eram 8, uma por
   categoria) — o modelo recebe todas as fotos do cômodo de uma vez e
   devolve as 8 categorias num único JSON. Ao alterar o formato do prompt

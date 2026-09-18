@@ -14,6 +14,21 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 # dados reais (11/09/2026) e entrada 5x mais barata — ver CLAUDE.md.
 MODEL_NAME = "gemini-3.5-flash-lite"
 
+# Itens que o modelo avaliar com certeza ABAIXO deste valor (0-100) vão para
+# Pendencias_Validacao.txt, para o vistoriador conferir nas fotos antes de o
+# laudo sair. O valor fica só aqui, fora do prompt: se o modelo souber o
+# corte, tende a responder logo acima dele. A certeza é autoavaliação do
+# modelo, não probabilidade medida — serve para triagem, não como garantia.
+LIMIAR_CERTEZA = 85
+
+# Regras gerais adotadas a partir de pendências validadas (ver validar.py).
+# Entram no prompt de toda vistoria, junto com REGRAS_GERAIS. O arquivo fica
+# no repositório, que é público — por isso só regra geral de redação, nunca
+# endereço, nome de cliente ou fato específico de um imóvel.
+ARQUIVO_REGRAS_VALIDADAS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "regras_validadas.txt"
+)
+
 # Extensões de imagem aceitas dentro das pastas de cômodo
 EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")
 

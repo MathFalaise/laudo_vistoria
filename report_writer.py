@@ -14,6 +14,25 @@ from config import CATEGORIAS, ROTULOS_CATEGORIA
 # texto — em vez de deixar um bloco vazio no meio do laudo.
 TEXTO_NAO_SE_APLICA = "Não se aplica."
 
+# Equivalente de TEXTO_NAO_SE_APLICA para a categoria "obs" — esse aparece
+# no laudo (confirma que o vistoriador olhou e não achou nada).
+TEXTO_SEM_OBSERVACOES = "Sem observações."
+
+
+def texto_vazio_da_categoria(categoria: str) -> str:
+    """Texto que representa "nada a relatar" numa categoria."""
+    return TEXTO_SEM_OBSERVACOES if categoria == "obs" else TEXTO_NAO_SE_APLICA
+
+
+def normalizar_linha(texto: str) -> str:
+    """Deixa uma linha de item no formato do laudo: começando com "*",
+    exceto os textos literais de categoria vazia, que vão sem asterisco."""
+    texto = " ".join(texto.split())
+    sem_asterisco = texto.lstrip("*").strip()
+    if sem_asterisco in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES):
+        return sem_asterisco
+    return f"*{sem_asterisco}" if sem_asterisco else ""
+
 
 def montar_texto_comodo(nome_comodo: str, dados: dict) -> str:
     linhas = [f"{nome_comodo.upper()}", ""]

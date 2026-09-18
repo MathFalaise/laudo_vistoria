@@ -15,6 +15,7 @@ import os
 from gemini_client import criar_cliente, revisar_laudo
 from main import listar_pastas_comodo
 from report_writer import parsear_txt_comodo, salvar_txt_comodo, salvar_relatorio_completo
+from validacao import NOME_ARQUIVO_PENDENCIAS, ler_pendencias
 
 
 def main():
@@ -30,7 +31,24 @@ def main():
         default="",
         help="Informações confirmadas sobre este imóvel, repassadas à revisão (ver main.py --notas).",
     )
+    parser.add_argument(
+        "--ignorar-pendencias",
+        action="store_true",
+        help="Revisa mesmo com pendências de validação em aberto (elas deixam de bater com o laudo).",
+    )
     args = parser.parse_args()
+
+    # A revisão reescreve o texto dos itens; pendências em aberto apontam
+    # para o texto antigo e o validar.py deixaria de encontrá-las.
+    abertas = ler_pendencias(args.pasta_imovel)
+    if abertas and not args.ignorar_pendencias:
+        print(
+            f"Há {len(abertas)} pendência(s) de validação em aberto em "
+            f"{NOME_ARQUIVO_PENDENCIAS}. Rode validar.py antes do revisar.py — a "
+            "revisão muda o texto dos itens e as pendências deixariam de bater. "
+            "Para revisar mesmo assim, use --ignorar-pendencias."
+        )
+        return
 
     cliente = criar_cliente()
     nomes_comodo = listar_pastas_comodo(args.pasta_imovel)

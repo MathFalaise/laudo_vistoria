@@ -6,6 +6,10 @@ Este arquivo concentra TODO o "jeito de escrever" do laudo. Ajustar o texto
 aqui muda o resultado em todas as categorias, sem mexer no resto do código.
 """
 
+import os
+
+from config import ARQUIVO_REGRAS_VALIDADAS
+
 REGRAS_GERAIS = """
 Você é um vistoriador redigindo um laudo de vistoria de entrada de imóvel
 residencial no Brasil. Escreva em português, seguindo rigorosamente estas
@@ -154,9 +158,71 @@ Se não houver nada relevante, responda apenas: "Sem observações."
 }
 
 
+# Como o modelo deve avaliar a própria certeza em cada item. O limiar de
+# corte (config.LIMIAR_CERTEZA) NÃO aparece aqui de propósito: se o modelo
+# souber que abaixo de X vai para revisão, tende a responder X+1.
+INSTRUCAO_CERTEZA = """
+CERTEZA POR ITEM — para CADA item (cada linha do laudo) informe também:
+- "motivo": o que, dentro do item, NÃO está claramente visível nas fotos e
+  por quê (ex.: "roseta aparece em uma única foto, desfocada", "não dá para
+  distinguir granito de mármore com essa luz"). Se tudo no item está
+  claramente visível, deixe vazio.
+- "certeza": de 0 a 100, coerente com o motivo. A certeza do item é a da
+  afirmação MENOS segura dentro dele: se a porta é claramente de madeira
+  branca mas a roseta mal aparece, a certeza do item é a da roseta.
+  - 95 a 100: tudo no item está claramente visível, de preferência em mais
+    de uma foto, sem ambiguidade de material, cor ou quantidade. O que vem
+    das informações confirmadas do imóvel conta como 100.
+  - 85 a 94: visível, mas algum detalhe saiu de uma única foto ou de um
+    ângulo ruim.
+  - 60 a 84: parte do item está desfocada, escura ou coberta; o material é
+    ambíguo (granito x mármore, MDF x madeira maciça, porcelanato x
+    cerâmica); ou a quantidade pode estar errada.
+  - abaixo de 60: você está deduzindo algo que não aparece claramente (ex.:
+    uma peça que "costuma vir junto").
+- Isso vale também para "Não se aplica." e "Sem observações.": se as fotos
+  não mostram o cômodo inteiro e você não pode afirmar que não há janela,
+  porta, etc., a certeza deve ser baixa.
+- Seja honesto. Um item com certeza baixa vai ser conferido por um
+  vistoriador humano; um item errado com certeza alta vai direto para o
+  laudo do cliente.
+"""
+
+
+def carregar_regras_validadas() -> list:
+    """Lê as regras gerais que o vistoriador adotou via validar.py. Linhas
+    vazias e linhas começando com "#" são ignoradas."""
+    if not os.path.isfile(ARQUIVO_REGRAS_VALIDADAS):
+        return []
+    regras = []
+    with open(ARQUIVO_REGRAS_VALIDADAS, "r", encoding="utf-8") as arquivo:
+        for linha in arquivo:
+            linha = linha.strip()
+            if not linha or linha.startswith("#"):
+                continue
+            regras.append(linha.lstrip("-").strip())
+    return regras
+
+
+def _regras() -> str:
+    """REGRAS_GERAIS + as regras adotadas pelo vistoriador, se houver."""
+    regras = carregar_regras_validadas()
+    if not regras:
+        return REGRAS_GERAIS.strip()
+    adotadas = "\n".join(f"- {regra}" for regra in regras)
+    return (
+        f"{REGRAS_GERAIS.strip()}\n\n"
+        "REGRAS ADOTADAS PELO VISTORIADOR (validadas em vistorias anteriores; "
+        "têm a mesma força das regras acima e prevalecem em caso de "
+        f"conflito):\n{adotadas}"
+    )
+
+
 def montar_prompt_comodo(nome_comodo: str, categorias: list, notas_extras: str = "") -> str:
     """Monta UM ÚNICO prompt pedindo as 8 categorias de uma vez, com a
     resposta em JSON — troca 8 chamadas de API por cômodo por apenas 1.
+    Cada categoria volta como lista de itens, cada um com a certeza do
+    modelo (ver INSTRUCAO_CERTEZA).
 
     `notas_extras` é informação específica do imóvel em vistoria (ex.: nome
     exato da cor de tinta usada, confirmado pelo vistoriador) que ajuda o
@@ -168,7 +234,7 @@ def montar_prompt_comodo(nome_comodo: str, categorias: list, notas_extras: str =
         for categoria in categorias
     )
 
-    chaves_exemplo = ", ".join(f'"{categoria}": "..."' for categoria in categorias)
+    chaves = ", ".join(f'"{categoria}"' for categoria in categorias)
 
     bloco_notas = ""
     if notas_extras.strip():
@@ -179,19 +245,22 @@ def montar_prompt_comodo(nome_comodo: str, categorias: list, notas_extras: str =
         )
 
     return (
-        f"{REGRAS_GERAIS}\n\n"
+        f"{_regras()}\n\n"
         f"Cômodo: {nome_comodo}\n\n"
         f"{bloco_notas}"
         "Analise todas as fotos fornecidas deste cômodo e descreva CADA uma "
         "das categorias abaixo, seguindo à risca as instruções de cada uma "
         "e o formato de escrita definido acima:\n\n"
         f"{blocos_categoria}\n\n"
+        f"{INSTRUCAO_CERTEZA.strip()}\n\n"
         "IMPORTANTE — formato da resposta:\n"
         "Responda APENAS com um objeto JSON válido, sem texto antes ou "
-        "depois, sem markdown, sem ```json. O JSON deve ter exatamente "
-        "estas chaves, cada uma com uma string como valor (use \\n para "
-        "separar as linhas dentro do texto de cada categoria, sem linha em "
-        f"branco entre os itens): {{{chaves_exemplo}}}"
+        f"depois, sem markdown, sem ```json. Chaves: {chaves}. Cada chave é "
+        "uma LISTA de itens, e cada item é um objeto com \"texto\" (UMA "
+        "linha do laudo, começando com \"*\", ou exatamente \"Não se "
+        "aplica.\" / \"Sem observações.\"), \"motivo\" e \"certeza\". "
+        "Exemplo: {\"paredes\": [{\"texto\": \"*Paredes em pintura lisa na "
+        "cor branca, em bom estado.\", \"motivo\": \"\", \"certeza\": 97}]}"
     )
 
 
@@ -218,7 +287,7 @@ def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str =
         )
 
     return (
-        f"{REGRAS_GERAIS}\n\n"
+        f"{_regras()}\n\n"
         f"{bloco_notas}"
         "Abaixo está um laudo de vistoria JÁ GERADO para um imóvel inteiro, "
         "em JSON (cada chave é o nome de um cômodo; dentro de cada cômodo, "

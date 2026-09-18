@@ -10,7 +10,13 @@ import time
 from google import genai
 from google.genai import errors, types
 
-from config import API_KEY, MODEL_NAME, CATEGORIAS
+from config import API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA
+from report_writer import (
+    TEXTO_NAO_SE_APLICA,
+    TEXTO_SEM_OBSERVACOES,
+    normalizar_linha,
+    texto_vazio_da_categoria,
+)
 from style_guide import montar_prompt_comodo, montar_prompt_revisao
 
 # Nº de tentativas extras e espera entre elas quando o Gemini responde
@@ -76,6 +82,84 @@ def _schema_categorias(categorias: list) -> types.Schema:
     )
 
 
+def _schema_itens_com_certeza(categorias: list) -> types.Schema:
+    """Schema da análise de um cômodo: cada categoria é uma lista de itens
+    {texto, motivo, certeza}. A ordem texto -> motivo -> certeza é
+    proposital: o modelo escreve o item, diz o que nele é duvidoso e só
+    então dá a nota — em vez de se comprometer com um número antes."""
+    item = types.Schema(
+        type="OBJECT",
+        properties={
+            "texto": types.Schema(type="STRING"),
+            "motivo": types.Schema(type="STRING"),
+            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+        },
+        required=["texto", "motivo", "certeza"],
+        property_ordering=["texto", "motivo", "certeza"],
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={
+            categoria: types.Schema(type="ARRAY", items=item, min_items=1)
+            for categoria in categorias
+        },
+        required=categorias,
+        property_ordering=categorias,
+    )
+
+
+def _montar_categoria(categoria: str, itens) -> tuple:
+    """Junta os itens de uma categoria no texto do laudo e separa os que
+    ficaram abaixo de LIMIAR_CERTEZA. Devolve (texto, itens_incertos)."""
+    if not isinstance(itens, list) or not itens:
+        # O schema pede pelo menos 1 item; se mesmo assim vier vazio, não dá
+        # para afirmar nada sobre a categoria — vai para validação.
+        vazio = texto_vazio_da_categoria(categoria)
+        return vazio, [{
+            "categoria": categoria,
+            "texto": vazio,
+            "certeza": 0,
+            "motivo": "o modelo não devolveu nenhum item para esta categoria",
+        }]
+
+    linhas, incertos = [], []
+    for item in itens:
+        if not isinstance(item, dict):
+            continue
+        try:
+            certeza = max(0, min(100, int(item.get("certeza", 0))))
+        except (TypeError, ValueError):
+            certeza = 0
+        motivo = " ".join(str(item.get("motivo", "")).split())
+        # Um "texto" com várias linhas vira vários itens com a mesma certeza.
+        for bruta in str(item.get("texto", "")).splitlines():
+            linha = normalizar_linha(bruta)
+            if not linha:
+                continue
+            linhas.append(linha)
+            if certeza < LIMIAR_CERTEZA:
+                incertos.append({
+                    "categoria": categoria,
+                    "texto": linha,
+                    "certeza": certeza,
+                    "motivo": motivo or "(o modelo não explicou)",
+                })
+
+    # "Não se aplica."/"Sem observações." não convivem com itens reais; e,
+    # sem itens reais, a categoria fica com o texto vazio certo para ela
+    # ("Sem observações." no OBS, "Não se aplica." no resto).
+    vazios = (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)
+    reais = [linha for linha in linhas if linha not in vazios]
+    if reais:
+        return "\n".join(reais), [i for i in incertos if i["texto"] not in vazios]
+
+    vazio = texto_vazio_da_categoria(categoria)
+    if incertos:
+        menos_certo = min(incertos, key=lambda i: i["certeza"])
+        incertos = [dict(menos_certo, texto=vazio)]
+    return vazio, incertos
+
+
 def _gerar_com_retry(
     cliente: genai.Client,
     conteudo: list,
@@ -125,9 +209,16 @@ def _gerar_com_retry(
 
 def analisar_comodo(
     cliente: genai.Client, blocos_imagem: list, nome_comodo: str, notas_extras: str = ""
-) -> dict:
-    """Chama a API UMA vez para o cômodo inteiro e retorna
-    {categoria: texto} para as 8 categorias definidas em config.CATEGORIAS.
+) -> tuple:
+    """Chama a API UMA vez para o cômodo inteiro e retorna (dados, incertos):
+
+    - dados: {categoria: texto} para as 8 categorias de config.CATEGORIAS,
+      no formato que report_writer grava;
+    - incertos: itens que o modelo avaliou com certeza abaixo de
+      config.LIMIAR_CERTEZA — [{categoria, texto, certeza, motivo}].
+
+    Os itens incertos continuam no laudo; a lista serve para o vistoriador
+    conferir (ver validacao.py e validar.py).
 
     `notas_extras` repassa informação específica deste imóvel (ex.: cor
     exata de tinta confirmada) para o prompt — ver style_guide.montar_prompt_comodo."""
@@ -137,7 +228,7 @@ def analisar_comodo(
     texto_bruto = _gerar_com_retry(
         cliente,
         conteudo,
-        response_schema=_schema_categorias(CATEGORIAS),
+        response_schema=_schema_itens_com_certeza(CATEGORIAS),
         # Cômodos com muitas fotos/mobília geram descrições longas — um
         # teto baixo aqui corta o JSON no meio e quebra o parsing.
         max_output_tokens=8192,
@@ -153,7 +244,12 @@ def analisar_comodo(
             f"Início da resposta recebida:\n{_trecho_para_erro(texto_bruto)}"
         ) from erro
 
-    return {categoria: str(dados.get(categoria, "")).strip() for categoria in CATEGORIAS}
+    resultado, incertos = {}, []
+    for categoria in CATEGORIAS:
+        texto, incertos_categoria = _montar_categoria(categoria, dados.get(categoria))
+        resultado[categoria] = texto
+        incertos.extend(incertos_categoria)
+    return resultado, incertos
 
 
 def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "") -> dict:
