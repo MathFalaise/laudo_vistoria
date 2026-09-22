@@ -9,3 +9,8 @@
 
 # adotadas em 22/09/2026
 - Não escrever "Mais um/uma...": item repetido vira UMA linha com a quantidade total. Mas itens parecidos que são móveis/peças diferentes (ex.: uma bancada com cuba e uma bancada de apoio) continuam em linhas separadas — não force a junção só porque o nome é parecido.
+
+# adotadas em 22/09/2026
+- Quando o cômodo não tiver teto (área externa descoberta), responda "Não se aplica." na categoria Teto — não descreva laje ou cobertura que não existe. Havendo beiral, telhado aparente ou forro, descreva o que aparece na foto.
+- Releia as informações confirmadas do imóvel antes de fechar cada cômodo. Cor e acabamento informados na nota valem em todos os cômodos onde se aplicam: sombra, contraluz ou tom diferente na foto NÃO são motivo para mudar a cor informada.
+- Defeito citado nas notas para um item específico (ex.: cortina com rasgos) tem que aparecer na linha daquele item, não só na OBS.

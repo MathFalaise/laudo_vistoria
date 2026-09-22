@@ -36,10 +36,16 @@ regras de formatação:
   invente itens, materiais ou cores que não possam ser confirmados.
 - A FOTO MANDA, A NOTA ORIENTA: as informações confirmadas do imóvel (ver
   abaixo) descrevem o PADRÃO da casa, não o conteúdo de cada cômodo. Cada
-  cômodo é descrito a partir das FOTOS DELE. Se a foto mostrar coisa
-  diferente da nota (a nota diz parede pintada e a foto mostra textura
-  projetada, azulejo, madeira ou outra cor), escreva o que a FOTO mostra,
-  sem tentar encaixar a nota à força.
+  cômodo é descrito a partir das FOTOS DELE. Se a foto mostrar ACABAMENTO
+  diferente do que a nota diz (a nota diz parede pintada e a foto mostra
+  textura projetada, azulejo ou madeira), escreva o que a FOTO mostra, sem
+  tentar encaixar a nota à força. O mesmo vale para item que existe ou não
+  existe no cômodo.
+  A exceção é COR informada na nota: foto tem sombra, contraluz e balanço
+  de branco, e a mesma tinta aparece mais clara ou mais escura de um
+  cômodo para outro. Se a nota disser a cor da parede (ou de qualquer
+  acabamento), use a cor da NOTA em todos os cômodos onde ela se aplica —
+  só mude se a foto mostrar outro acabamento, não por impressão de tom.
 - DEFEITO NÃO SE ESPALHA: furo, trinca, mancha, mofo, quebra, risco,
   estufamento e afins só entram no texto do cômodo em que você CONSEGUE
   VER o defeito nas fotos daquele cômodo. Uma nota dizendo que as paredes
