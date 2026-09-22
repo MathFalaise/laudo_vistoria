@@ -164,8 +164,19 @@ pintada". Informe também cor e estado de conservação.
 """,
     "porta": """
 Descreva a(s) porta(s) de acesso do cômodo (não confundir com portas de
-armários, que entram em Mobília): material, cor, tipo (lisa, veneziana,
-almofadada), fechadura/maçaneta e dobradiças, estado de conservação.
+armários, que entram em Mobília): material, cor, tipo (lisa, frisada,
+veneziana, almofadada), fechadura/maçaneta e dobradiças, estado de
+conservação.
+
+SEMPRE olhe e descreva também, em cada porta:
+- o BATENTE (o marco onde a folha encosta): material e cor;
+- as VISTAS (as guarnições/alizares que cobrem a junção do batente com a
+  parede): material, cor e se são lisas ou trabalhadas;
+- a SOLEIRA, quando houver: material e cor (ex.: soleira em granito na cor
+  preta). Se a foto não mostrar soleira nenhuma no vão, não escreva que
+  há uma — e também não escreva que não há.
+Batente e vistas costumam ser do mesmo material e cor da folha; ainda
+assim, confirme na foto antes de escrever, porque nem sempre são.
 """,
     "janela": """
 Descreva a(s) janela(s) do cômodo: material do caixilho (alumínio, madeira,
