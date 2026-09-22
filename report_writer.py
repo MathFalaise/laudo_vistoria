@@ -83,6 +83,56 @@ def grupos_de_itens_repetidos(linhas: list) -> list:
     return [indices for indices in por_item.values() if len(indices) > 1]
 
 
+# "testado e em funcionamento" (e suas flexões), com a vírgula que o
+# antecede. Ver a regra TESTES em style_guide.REGRAS_GERAIS.
+_FRASE_TESTE = re.compile(
+    r"\s*,?\s*testad[oa]s?\s+e\s+em\s+funcionamento\s*,?", re.IGNORECASE
+)
+
+# Categorias em que NADA é testado: parede, piso, teto, porta e janela não
+# passam por teste elétrico nem hidráulico.
+_CATEGORIAS_SEM_TESTE = ("paredes", "piso", "teto", "porta", "janela", "obs")
+
+# Em Mobília, só a peça elétrica ou hidráulica é testada; armário, bancada,
+# espelho, box e acessório, não.
+_ITENS_TESTAVEIS = (
+    "torneira", "misturador", "chuveiro", "ducha", "registro", "descarga",
+    "caixa acoplada", "válvula", "tanque", "aquecedor", "bidê", "filtro",
+    "interfone", "campainha", "ventilador", "exaustor", "depurador",
+    "cooktop", "coifa", "forno", "aquecimento",
+)
+
+
+def limpar_testes_indevidos(categoria: str, texto: str) -> str:
+    """Tira "testado e em funcionamento" de onde a regra TESTES não permite.
+
+    O modelo, ao receber nas notas que todos os testes foram feitos, tende a
+    espalhar a frase por tudo — houve laudo com "paredes testadas e em
+    funcionamento" e "espelho testado e em funcionamento". A regra no prompt
+    sozinha não segurou, então a limpeza é feita também aqui, no texto
+    pronto: determinística e de graça."""
+    linhas = []
+    for linha in texto.split("\n"):
+        testavel = categoria not in _CATEGORIAS_SEM_TESTE and (
+            categoria != "mobilia"
+            or any(item in linha.lower() for item in _ITENS_TESTAVEIS)
+        )
+        if not testavel and _FRASE_TESTE.search(linha):
+            linha = normalizar_linha(_FRASE_TESTE.sub(", ", linha).replace(" ,", ","))
+            linha = re.sub(r",\s*(,\s*)+", ", ", linha)
+            linha = re.sub(r",\s*\.", ".", linha).replace(", ,", ",")
+            # "..., em bom estado, testado e em funcionamento, em bom estado."
+            # deixa o estado repetido depois que a frase sai.
+            linha = re.sub(
+                r",\s*em (bom|regular|ótimo|péssimo) estado\s*(?=,\s*em \1 estado\b)",
+                "",
+                linha,
+                flags=re.IGNORECASE,
+            )
+        linhas.append(linha)
+    return "\n".join(linhas)
+
+
 def montar_texto_comodo(nome_comodo: str, dados: dict) -> str:
     linhas = [f"{nome_comodo.upper()}", ""]
     teve_categoria = False

@@ -16,6 +16,7 @@ from report_writer import (
     TEXTO_NAO_SE_APLICA,
     TEXTO_SEM_OBSERVACOES,
     grupos_de_itens_repetidos,
+    limpar_testes_indevidos,
     linha_com_mais_um,
     normalizar_linha,
     texto_vazio_da_categoria,
@@ -237,6 +238,11 @@ def _montar_categoria(categoria: str, registros: list) -> tuple:
             "motivo": menos_certo[2] or SEM_MOTIVO,
         }]
 
+    # "Testado e em funcionamento" onde não cabe (parede, piso, teto, porta,
+    # janela, mobília sem função elétrica/hidráulica) sai aqui — ver a regra
+    # TESTES em style_guide.REGRAS_GERAIS.
+    reais = [(limpar_testes_indevidos(categoria, linha), certeza, motivo)
+             for linha, certeza, motivo in reais]
     linhas = [linha for linha, _, _ in reais]
 
     # Conjuntos de linhas que violam ITENS REPETIDOS: o mesmo item em

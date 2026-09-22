@@ -134,7 +134,15 @@ faturamento ativo — ver "Decisões importantes").
 - **Testes:** só se escreve "testado" quando `--notas` confirma os testes
   (o modelo não vê teste em foto). Com testes confirmados, todo item
   elétrico e cada peça hidráulica levam "testado(s) e em funcionamento"
-  (pedido do vistoriador, 18/09/2026).
+  (pedido do vistoriador, 18/09/2026) — e NADA além disso. Na R. Correia
+  de Freitas (21/09/2026), com todos os testes confirmados nas notas, o
+  modelo espalhou a frase pelo laudo inteiro: "paredes testadas e em
+  funcionamento", "teto testado", "espelho testado". Por isso a regra no
+  prompt tem uma trava determinística junto:
+  `report_writer.limpar_testes_indevidos` tira a frase de paredes, piso,
+  teto, porta, janela e OBS, e da mobília sem função elétrica ou
+  hidráulica (armário, bancada, espelho, box, acessório). Roda dentro de
+  `_montar_categoria`, então vale para `main.py` e para `revisar.py`.
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a

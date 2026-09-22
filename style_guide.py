@@ -70,6 +70,13 @@ regras de formatação:
   descarga, registro, tanque), logo depois da peça dentro da linha:
   "...torneira monocomando em metal cromado, testada e em funcionamento,
   sifão em PVC...".
+  "Testado e em funcionamento" vale SÓ para esses dois grupos: item
+  elétrico e peça hidráulica. NUNCA escreva isso em parede, piso, teto,
+  porta, janela, soleira, rodapé, nem em mobília sem função elétrica ou
+  hidráulica (armário, gabinete, bancada, espelho, box, prateleira,
+  porta-toalha, porta-papel, saboneteira, cabide). Parede não é testada:
+  se as notas confirmarem os testes, isso NÃO muda o texto dessas
+  categorias.
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um
   cômodo sem janela), responda apenas: "Não se aplica."
 - Vidro de box de banheiro: use sempre o termo "vidro Blindex" (nunca
