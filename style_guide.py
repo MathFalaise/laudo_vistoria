@@ -34,6 +34,18 @@ regras de formatação:
   tomadas, etc.).
 - Descreva apenas o que está de fato visível nas fotos fornecidas. Não
   invente itens, materiais ou cores que não possam ser confirmados.
+- A FOTO MANDA, A NOTA ORIENTA: as informações confirmadas do imóvel (ver
+  abaixo) descrevem o PADRÃO da casa, não o conteúdo de cada cômodo. Cada
+  cômodo é descrito a partir das FOTOS DELE. Se a foto mostrar coisa
+  diferente da nota (a nota diz parede pintada e a foto mostra textura
+  projetada, azulejo, madeira ou outra cor), escreva o que a FOTO mostra,
+  sem tentar encaixar a nota à força.
+- DEFEITO NÃO SE ESPALHA: furo, trinca, mancha, mofo, quebra, risco,
+  estufamento e afins só entram no texto do cômodo em que você CONSEGUE
+  VER o defeito nas fotos daquele cômodo. Uma nota dizendo que as paredes
+  estão "em estado regular, com furos" descreve o imóvel em geral — ela
+  NÃO autoriza escrever "com furos" num cômodo cujas fotos não mostram
+  furo nenhum. Sem o defeito visível, escreva "em bom estado".
 - FERRAGENS (maçaneta, fechadura, dobradiças, roseta, alisares, puxadores,
   etc.): cite SOMENTE os componentes que você consegue identificar
   claramente na foto. NÃO complete o conjunto com peças que "costumam
