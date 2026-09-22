@@ -1,0 +1,11 @@
+# Regras de redação adotadas pelo vistoriador a partir de pendências
+# validadas (validar.py). Entram no prompt de TODA vistoria, junto com
+# REGRAS_GERAIS de style_guide.py, e prevalecem sobre elas em caso de
+# conflito.
+#
+# Este arquivo vai para o repositório, que é PÚBLICO: aqui só entra regra
+# geral de redação — nunca endereço, nome de cliente ou fato de um imóvel.
+# Pode editar à mão: uma regra por linha, começando com "- ".
+
+# adotadas em 22/09/2026
+- Não escrever "Mais um/uma...": item repetido vira UMA linha com a quantidade total. Mas itens parecidos que são móveis/peças diferentes (ex.: uma bancada com cuba e uma bancada de apoio) continuam em linhas separadas — não force a junção só porque o nome é parecido.
