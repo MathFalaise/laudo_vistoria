@@ -18,3 +18,6 @@
 # adotadas em 22/09/2026
 - Nunca escreva material em dúvida com "ou" (ex.: "granito ou mármore", "cimento queimado ou pedra"). O laudo afirma o que dá para identificar: se não dá para saber o material, descreva o que se vê (cor, acabamento, formato) e deixe o material de fora.
 - Tanque, bancada, cuba e pia não são testados — o que se testa é a torneira, o registro, o chuveiro e a descarga. Não escreva "testado e em funcionamento" na peça que só recebe água.
+
+# adotadas em 22/09/2026
+- O vaso sanitário (bacia sanitária, com ou sem caixa acoplada) entra SEMPRE na categoria Mobília do banheiro, BWC, suíte ou lavabo — nunca em OBS, nunca em Componentes Elétricos, nunca em outra categoria.

@@ -217,7 +217,9 @@ nicho, espelho, bacia sanitária (com ou sem caixa acoplada, assento e
 tampa, acionamento), box (vidro Blindex), chuveiro/ducha, ducha
 higiênica, registros e acessórios (porta-toalha, porta-papel,
 saboneteira, cabides/ganchos). Chuveiro e ducha higiênica entram AQUI,
-nunca em Componentes Elétricos. Descreva cada peça que aparecer nas
+nunca em Componentes Elétricos. O vaso sanitário (bacia sanitária)
+também é SEMPRE mobília do banheiro, BWC, suíte ou lavabo — nunca vai
+para OBS nem para outra categoria. Descreva cada peça que aparecer nas
 fotos, com material, cor e quantidade — é a parte do laudo de banheiro
 que mais recebe atenção. Exemplo validado de mobília de banheiro:
 
