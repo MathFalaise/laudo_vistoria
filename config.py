@@ -21,6 +21,16 @@ MODEL_NAME = "gemini-3.5-flash-lite"
 # modelo, não probabilidade medida — serve para triagem, não como garantia.
 LIMIAR_CERTEZA = 85
 
+# Item com certeza ATÉ este valor nem chega ao vistoriador de primeira: o
+# script manda o modelo olhar as fotos de novo, só aquele item, e é o texto
+# da segunda olhada que entra no laudo (ver
+# gemini_client._corrigir_itens_incertos). Pedido do vistoriador em
+# 22/09/2026 — ele quer conferir à mão só a faixa do meio, entre este
+# limiar e LIMIAR_CERTEZA. Item que continuar aqui embaixo depois da
+# segunda olhada vira pendência assim mesmo: ninguém assina um laudo com
+# uma afirmação que o próprio motor considera duvidosa.
+LIMIAR_CORRECAO_AUTOMATICA = 50
+
 # Regras gerais adotadas a partir de pendências validadas (ver validar.py).
 # Entram no prompt de toda vistoria, junto com REGRAS_GERAIS. O arquivo fica
 # no repositório, que é público — por isso só regra geral de redação, nunca

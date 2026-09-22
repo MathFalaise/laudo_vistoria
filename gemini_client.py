@@ -11,7 +11,8 @@ import httpx
 from google import genai
 from google.genai import errors, types
 
-from config import API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA, ROTULOS_CATEGORIA
+from config import (API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA,
+                    LIMIAR_CORRECAO_AUTOMATICA, ROTULOS_CATEGORIA)
 from report_writer import (
     TEXTO_NAO_SE_APLICA,
     TEXTO_SEM_OBSERVACOES,
@@ -21,7 +22,8 @@ from report_writer import (
     normalizar_linha,
     texto_vazio_da_categoria,
 )
-from style_guide import montar_prompt_comodo, montar_prompt_consolidacao, montar_prompt_revisao
+from style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
+                         montar_prompt_correcao, montar_prompt_revisao)
 
 # Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
 # sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
@@ -37,9 +39,16 @@ TEMPO_LIMITE_CHAMADA_SEGUNDOS = 300
 
 SEM_MOTIVO = "(o modelo não explicou)"
 MOTIVO_REPETIDOS = (
-    'itens do mesmo tipo em linhas separadas (ou com "Mais um/uma"), e a '
-    "correção automática não resolveu — troque por uma linha só, com a "
-    'quantidade total (ex.: "*Duas portas ...", "*Três armários ..., sendo ...")'
+    'linha começando com "Mais um/uma", e a correção automática não '
+    "resolveu — junte com a linha anterior numa só, com a quantidade total "
+    '(ex.: "*Duas portas ...", "*Três armários ..., sendo ...")'
+)
+
+# Item que passou pela segunda olhada nas fotos e MESMO ASSIM ficou com
+# certeza baixa (ver _corrigir_itens_incertos).
+MOTIVO_REANALISADO = (
+    "o modelo já olhou as fotos uma segunda vez, só para este item, e "
+    "continuou sem certeza — confira você mesmo"
 )
 
 
@@ -102,12 +111,9 @@ def _schema_categorias(categorias: list) -> types.Schema:
     )
 
 
-def _schema_itens_com_certeza(categorias: list) -> types.Schema:
-    """Schema da análise de um cômodo: cada categoria é uma lista de itens
-    {texto, motivo, certeza}. A ordem texto -> motivo -> certeza é
-    proposital: o modelo escreve o item, diz o que nele é duvidoso e só
-    então dá a nota — em vez de se comprometer com um número antes."""
-    item = types.Schema(
+def _schema_item_com_certeza() -> types.Schema:
+    """Um item do laudo como o modelo devolve: texto, motivo e certeza."""
+    return types.Schema(
         type="OBJECT",
         properties={
             "texto": types.Schema(type="STRING"),
@@ -117,6 +123,14 @@ def _schema_itens_com_certeza(categorias: list) -> types.Schema:
         required=["texto", "motivo", "certeza"],
         property_ordering=["texto", "motivo", "certeza"],
     )
+
+
+def _schema_itens_com_certeza(categorias: list) -> types.Schema:
+    """Schema da análise de um cômodo: cada categoria é uma lista de itens
+    {texto, motivo, certeza}. A ordem texto -> motivo -> certeza é
+    proposital: o modelo escreve o item, diz o que nele é duvidoso e só
+    então dá a nota — em vez de se comprometer com um número antes."""
+    item = _schema_item_com_certeza()
     return types.Schema(
         type="OBJECT",
         properties={
@@ -200,6 +214,84 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
     return [(linha, *originais.get(linha, herdada)) for linha in novas]
 
 
+def _corrigir_itens_incertos(
+    cliente: genai.Client,
+    blocos_imagem: list,
+    nome_comodo: str,
+    registros_por_categoria: dict,
+    notas_extras: str = "",
+) -> dict:
+    """Segunda olhada nas fotos, só nos itens com certeza até
+    config.LIMIAR_CORRECAO_AUTOMATICA. Devolve os registros com esses itens
+    substituídos pelo texto/certeza da nova análise.
+
+    É UMA chamada por cômodo, e só acontece quando algum item sai lá
+    embaixo — na maioria dos cômodos não roda nenhuma vez. Na primeira
+    passada o modelo divide a atenção entre 8 categorias e todas as fotos;
+    aqui ele olha as mesmas fotos sabendo qual era a dúvida, que é quando
+    ele costuma resolver. Se a chamada falhar, devolve tudo como estava —
+    o item segue para pendência, como antes."""
+    alvos = [
+        (categoria, indice)
+        for categoria, registros in registros_por_categoria.items()
+        for indice, (_, certeza, _) in enumerate(registros)
+        if certeza <= LIMIAR_CORRECAO_AUTOMATICA
+    ]
+    if not alvos:
+        return registros_por_categoria
+
+    itens = [
+        {
+            "rotulo": ROTULOS_CATEGORIA[categoria],
+            "texto": registros_por_categoria[categoria][indice][0],
+            "motivo": registros_por_categoria[categoria][indice][2],
+        }
+        for categoria, indice in alvos
+    ]
+    schema = types.Schema(
+        type="OBJECT",
+        properties={
+            "itens": types.Schema(
+                type="ARRAY", items=_schema_item_com_certeza(), min_items=1
+            )
+        },
+        required=["itens"],
+    )
+
+    print(f"  Segunda olhada nas fotos: {len(alvos)} item(ns) com certeza baixa...", flush=True)
+    try:
+        bruto = _gerar_com_retry(
+            cliente,
+            list(blocos_imagem) + [montar_prompt_correcao(nome_comodo, itens, notas_extras)],
+            response_schema=schema,
+            max_output_tokens=4096,
+            descricao_erro=f"a segunda olhada nos itens duvidosos de '{nome_comodo}'",
+        )
+        novos = _extrair_json(bruto).get("itens", [])
+    except Exception as erro:
+        print(f"  Não consegui reanalisar os itens duvidosos ({erro.__class__.__name__}) — vão para validação.", flush=True)
+        return registros_por_categoria
+
+    if len(novos) != len(alvos):
+        print(f"  A segunda olhada devolveu {len(novos)} item(ns) para {len(alvos)} pedido(s) — mantendo os originais.", flush=True)
+        return registros_por_categoria
+
+    corrigidos = {categoria: list(registros) for categoria, registros in registros_por_categoria.items()}
+    for (categoria, indice), novo in zip(alvos, novos):
+        linha = normalizar_linha(str(novo.get("texto", "")))
+        if not linha:
+            continue
+        certeza = novo.get("certeza", 0)
+        certeza = certeza if isinstance(certeza, int) else 0
+        motivo = str(novo.get("motivo", "")).strip()
+        if certeza < LIMIAR_CERTEZA:
+            # Continua duvidoso: o vistoriador precisa saber que este item
+            # já teve uma segunda chance e ainda assim não fechou.
+            motivo = f"{motivo + '; ' if motivo else ''}{MOTIVO_REANALISADO}"
+        corrigidos[categoria][indice] = (linha, certeza, motivo)
+    return corrigidos
+
+
 def _montar_categoria(categoria: str, registros: list) -> tuple:
     """Junta as linhas de uma categoria no texto do laudo e separa as
     pendências. Devolve (texto, pendencias). Vira pendência:
@@ -245,11 +337,18 @@ def _montar_categoria(categoria: str, registros: list) -> tuple:
              for linha, certeza, motivo in reais]
     linhas = [linha for linha, _, _ in reais]
 
-    # Conjuntos de linhas que violam ITENS REPETIDOS: o mesmo item em
-    # várias linhas, e cada "Mais um/uma" com a linha anterior. Conjuntos
-    # que se tocam viram um só (ex.: "*Um armário" + "*Mais um armário").
-    problemas = [set(grupo) for grupo in grupos_de_itens_repetidos(linhas)]
-    problemas += [{i - 1, i} if i > 0 else {i} for i, linha in enumerate(linhas) if linha_com_mais_um(linha)]
+    # Cada "Mais um/uma" vira pendência junto com a linha anterior, que é o
+    # item que ela continua. Conjuntos que se tocam viram um só (ex.: "*Um
+    # armário" + "*Mais um armário" + "*Mais um armário").
+    #
+    # O mesmo substantivo em linhas separadas NÃO vira pendência: isso é
+    # palpite de heurística e errou feio na Cozinha da R. Correia de
+    # Freitas, onde juntou "*Uma bancada em granito com cuba..." com "*Uma
+    # bancada de apoio...", que são móveis diferentes. Ele continua
+    # disparando a correção automática (_tem_itens_repetidos), que é o
+    # modelo julgando com o texto na mão; o que o modelo decidir manter
+    # separado, fica separado (regra do vistoriador, 22/09/2026).
+    problemas = [{i - 1, i} if i > 0 else {i} for i, linha in enumerate(linhas) if linha_com_mais_um(linha)]
     unidos = []
     for conjunto in problemas:
         for outro in [u for u in unidos if u & conjunto]:
@@ -379,10 +478,17 @@ def analisar_comodo(
             f"Início da resposta recebida:\n{_trecho_para_erro(texto_bruto)}"
         ) from erro
 
+    registros_por_categoria = {
+        categoria: _consolidar_repetidos(cliente, categoria, _registros(dados.get(categoria)))
+        for categoria in CATEGORIAS
+    }
+    registros_por_categoria = _corrigir_itens_incertos(
+        cliente, blocos_imagem, nome_comodo, registros_por_categoria, notas_extras
+    )
+
     resultado, incertos = {}, []
     for categoria in CATEGORIAS:
-        registros = _consolidar_repetidos(cliente, categoria, _registros(dados.get(categoria)))
-        texto, incertos_categoria = _montar_categoria(categoria, registros)
+        texto, incertos_categoria = _montar_categoria(categoria, registros_por_categoria[categoria])
         resultado[categoria] = texto
         incertos.extend(incertos_categoria)
     return resultado, incertos

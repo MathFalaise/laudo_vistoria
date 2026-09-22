@@ -378,6 +378,60 @@ def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str =
     )
 
 
+def montar_prompt_correcao(nome_comodo: str, itens: list, notas_extras: str = "") -> str:
+    """Prompt da SEGUNDA OLHADA: as mesmas fotos do cômodo, mas focado só
+    nos itens que saíram com certeza muito baixa (até
+    config.LIMIAR_CORRECAO_AUTOMATICA). Na primeira passada o modelo olha o
+    cômodo inteiro e divide a atenção entre 8 categorias; aqui ele olha
+    poucos itens de cada vez, sabendo exatamente qual era a dúvida.
+
+    `itens` é uma lista de {"rotulo", "texto", "motivo"}, na ordem em que a
+    resposta tem que voltar — ver gemini_client._corrigir_itens_incertos."""
+    lista = "\n\n".join(
+        f"{numero}. Categoria: {item['rotulo']}\n"
+        f"   Texto atual: {item['texto']}\n"
+        f"   Dúvida que você mesmo apontou: {item['motivo'] or '(não informada)'}"
+        for numero, item in enumerate(itens, start=1)
+    )
+
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel específico (use estes "
+            "dados exatos sempre que se aplicarem, em vez de tentar advinhar "
+            f"pela foto):\n{notas_extras.strip()}\n\n"
+        )
+
+    return (
+        f"{_regras()}\n\n"
+        f"Cômodo: {nome_comodo}\n\n"
+        f"{bloco_notas}"
+        "Você já descreveu este cômodo a partir destas mesmas fotos, e os "
+        "itens abaixo saíram com certeza muito baixa. Olhe as fotos de novo, "
+        "agora só para eles, e resolva a dúvida de cada um:\n\n"
+        f"{lista}\n\n"
+        "Para cada item, procure nas fotos o detalhe que faltava e reescreva "
+        "a linha do laudo. Regras da reescrita:\n"
+        "- Se as fotos mostrarem o detalhe, escreva a linha completa e "
+        "correta, com a certeza alta que isso merece.\n"
+        "- Se as fotos NÃO mostrarem, tire da linha a parte que você não "
+        "consegue confirmar, em vez de advinhar: uma linha mais curta e "
+        "verdadeira vale mais do que uma detalhada e errada.\n"
+        "- Se o item não existir mesmo no cômodo, responda exatamente "
+        '"Não se aplica." (ou "Sem observações.", na categoria OBS).\n'
+        "- Não mude nada que já estava certo, e não descreva outros itens "
+        "do cômodo: responda só sobre os que estão na lista.\n\n"
+        f"{INSTRUCAO_CERTEZA.strip()}\n\n"
+        "IMPORTANTE — formato da resposta:\n"
+        "Responda APENAS com um objeto JSON válido, sem texto antes ou "
+        'depois, sem markdown, sem ```json: {"itens": [...]}, com '
+        f"EXATAMENTE {len(itens)} item(ns), na MESMA ORDEM da lista acima. "
+        'Cada item é um objeto com "texto" (uma linha do laudo, começando '
+        'com "*"), "motivo" (o que ainda ficou duvidoso, ou "" se nada '
+        'ficou) e "certeza".'
+    )
+
+
 def montar_prompt_consolidacao(rotulo_categoria: str, texto_categoria: str) -> str:
     """Prompt de TEXTO PURO (sem fotos, barato) para consertar uma categoria
     que violou a regra de ITENS REPETIDOS (o mesmo item em várias linhas, ou

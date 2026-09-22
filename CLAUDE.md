@@ -113,6 +113,18 @@ faturamento ativo — ver "Decisões importantes").
   anterior do mesmo cômodo, com as mesmas fotos, tinha descrito uma janela
   de correr. Erro confiante não é pego por esse sistema: ele serve de
   triagem ("onde olhar primeiro"), não de garantia.
+- **Segunda olhada (desde 22/09/2026):** item com certeza até
+  `config.LIMIAR_CORRECAO_AUTOMATICA` (50) não vai direto para o
+  vistoriador — `_corrigir_itens_incertos` faz UMA chamada por cômodo, com
+  as mesmas fotos, focada só nesses itens e citando a dúvida que o próprio
+  modelo apontou; é o texto da segunda olhada que entra no laudo. Só roda
+  quando algum item sai lá embaixo (na R. Correia de Freitas foi 1 item em
+  14 cômodos), então não é "rodar tudo duas vezes" — o vistoriador
+  recusou dobrar o custo. A ideia é que o trabalho manual dele fique na
+  faixa do meio (de 50 a `LIMIAR_CERTEZA`): abaixo disso o modelo tenta
+  resolver sozinho, acima não é pendência. Item que continuar baixo depois
+  da segunda olhada VIRA pendência assim mesmo, com `MOTIVO_REANALISADO` —
+  laudo é documento assinado, afirmação duvidosa não passa calada.
 - **"Mais um/uma" é proibido** (pedido explícito do vistoriador, depois de
   aparecer em 3 laudos seguidos apesar da regra antiga). Item repetido vira
   UMA linha com a quantidade total ("*Duas portas..."), com "sendo um...
@@ -129,6 +141,14 @@ faturamento ativo — ver "Decisões importantes").
   R. Leopoldo (8 placas em 4 linhas, 3 armários em 3 linhas) depois que o
   "Mais um" sumiu. Posição/tamanho não fazem tipo diferente: armário
   inferior e aéreo são "armários" (confirmado pelo vistoriador).
+  **Só "Mais um/uma" vira pendência** (camada 3) desde 22/09/2026: o
+  substantivo repetido continua disparando a correção automática (camada
+  2, onde o modelo julga com o texto na mão), mas o que sobrar dele fica
+  como está. A heurística de substantivo é palpite e errou na Cozinha da
+  R. Correia de Freitas, juntando "*Uma bancada em granito com cuba..."
+  com "*Uma bancada de apoio...", que são móveis diferentes — o
+  vistoriador decidiu "manter textos separados; apenas não colocar 'Mais
+  uma...'".
   Os exemplos da regra usam [cor]/[n] de propósito: um exemplo tirado de
   um imóvel real foi copiado palavra por palavra pelo modelo no teste.
 - **Testes:** só se escreve "testado" quando `--notas` confirma os testes
