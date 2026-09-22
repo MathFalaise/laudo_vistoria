@@ -31,6 +31,21 @@ LIMIAR_CERTEZA = 85
 # uma afirmação que o próprio motor considera duvidosa.
 LIMIAR_CORRECAO_AUTOMATICA = 50
 
+# CONFERÊNCIA (conferir.py): depois do laudo escrito, o modelo olha as fotos
+# de novo com o texto pronto na mão e aponta divergências — item que aparece
+# na foto e ficou de fora, afirmação que a foto não sustenta. Só vira
+# pendência o que ele apontar com certeza a partir daqui; abaixo disso é
+# ruído, e pendência demais ninguém lê.
+LIMIAR_CONFERENCIA = 70
+
+# Quantas fotos entram em cada mosaico da conferência. O Gemini cobra por
+# imagem, não por pixel (medido: 1.101 tokens por foto, em qualquer
+# resolução), então 4 fotos numa folha de contato custam 1/4 do preço.
+# Se mudar este número, rode a conferência num cômodo com item conhecido
+# faltando e veja se ele ainda é encontrado — quanto mais fotos por folha,
+# menor a miniatura.
+FOTOS_POR_MOSAICO_CONFERENCIA = 4
+
 # Regras gerais adotadas a partir de pendências validadas (ver validar.py).
 # Entram no prompt de toda vistoria, junto com REGRAS_GERAIS. O arquivo fica
 # no repositório, que é público — por isso só regra geral de redação, nunca

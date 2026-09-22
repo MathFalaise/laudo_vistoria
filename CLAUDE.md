@@ -11,8 +11,12 @@ grava o resultado em arquivos `.txt`.
 python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
 python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
 python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
+python conferir.py "C:\caminho\para\o\imovel"  # confere as fotos contra o laudo
 python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
 ```
+
+O `main.py` já roda a conferência no fim (desligue com `--sem-conferencia`);
+o `conferir.py` avulso serve para laudo antigo, gerado antes dela.
 
 A pasta do imóvel deve conter uma subpasta por cômodo, cada uma com as
 fotos daquele cômodo (`.jpg`, `.jpeg`, `.png`, `.heic`).
@@ -58,6 +62,9 @@ faturamento ativo — ver "Decisões importantes").
   fotos e chama `analisar_comodo`. Aceita `notas_extras` opcional
   (informação confirmada sobre o imóvel, ex.: cor exata de tinta) que é
   repassada até o prompt — ver `main.py --notas`.
+- **conferir.py** — CLI da conferência: monta as fotos em mosaico
+  (`image_utils.montar_mosaicos`), chama `gemini_client.conferir_comodo` e
+  grava as divergências como pendências de validação.
 - **report_writer.py** — grava o `.txt` de cada cômodo (dentro da própria
   pasta de fotos) e o `.txt` consolidado do imóvel inteiro
   (`Laudo_Vistoria_Completo.txt`, na raiz da pasta do imóvel).
@@ -163,6 +170,33 @@ faturamento ativo — ver "Decisões importantes").
   teto, porta, janela e OBS, e da mobília sem função elétrica ou
   hidráulica (armário, bancada, espelho, box, acessório). Roda dentro de
   `_montar_categoria`, então vale para `main.py` e para `revisar.py`.
+- **Conferência (desde 22/09/2026):** depois do laudo escrito, `conferir.py`
+  olha as fotos de novo e aponta o que divergir. Roda sozinha no fim do
+  `main.py`. Três decisões de projeto, todas medidas:
+  1. **Em dois passos, e nessa ordem.** Mandar fotos + texto pronto junto e
+     pedir "aponte as divergências" devolveu lista VAZIA em dois cômodos
+     testados, um deles com o teto descrito como forro de PVC sendo laje
+     pintada: lendo o texto, o modelo concorda com o texto. Então o passo 1
+     é um INVENTÁRIO às cegas (o modelo lista o que vê, sem ver o laudo) e o
+     passo 2 compara inventário × laudo, em chamada de texto puro. Com isso
+     o mesmo cômodo devolveu 25 itens e 4 divergências reais.
+  2. **Fotos em mosaico.** O Gemini cobra por IMAGEM, não por pixel —
+     medido com `usage_metadata`: 1.101 tokens por foto, igual em 1568px e
+     em 256px. Diminuir resolução não economiza nada; juntar 4 fotos numa
+     folha de contato economiza 4× (`FOTOS_POR_MOSAICO_CONFERENCIA`). A
+     conferência inteira sai por ~1/4 de uma vistoria nova.
+  3. **Nada entra sozinho no laudo.** A conferência só gera pendência: item
+     faltando vira pendência `tipo="falta"`, em que a linha "Item" é uma
+     PROPOSTA e o OK do vistoriador acrescenta ao laudo (ver `validacao`).
+     Divergência de fato vira pendência normal com a sugestão já preenchida
+     em CORREÇÃO. A precisão medida foi de ~50-60%: boa para uma lista de
+     conferência, péssima para aplicar sem ler.
+  Travas contra o vício conhecido da conferência — usar o silêncio do
+  inventário como prova de ausência e encurtar o laudo: sugestão que remove
+  item, que vira "Não se aplica." ou que encolhe a linha em mais de 25% é
+  descartada, assim como a que se justifica com "o inventário não menciona"
+  (`_ARGUMENTO_DE_AUSENCIA`). Sem elas, ela propôs apagar a trinca e o
+  estufamento que o vistoriador tinha confirmado em campo.
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a

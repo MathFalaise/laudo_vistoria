@@ -43,6 +43,7 @@ _CAMPOS = {
     "CERTEZA": "certeza",
     "MOTIVO": "motivo",
     "ITEM": "texto",
+    "TIPO": "tipo",
     "SITUACAO": "situacao",
     "DECISAO": "decisao",
     "CORRECAO": "correcao",
@@ -74,6 +75,12 @@ def _cabecalho(pasta_imovel: str) -> str:
         f"Itens que a IA descreveu com certeza abaixo de {LIMIAR_CERTEZA}%. Eles JÁ\n"
         "ESTÃO NO LAUDO — confira cada um nas fotos antes de entregar.\n"
         "\n"
+        'Pendência com "Tipo: falta" é o contrário: a conferência (conferir.py)\n'
+        'achou nas fotos um item que NÃO está no laudo, e a linha "Item" é a\n'
+        "proposta de texto. Nessas, OK = aceito, pode acrescentar ao laudo;\n"
+        "REMOVER = descarte a proposta; CORRIGIR = acrescente, mas com o texto\n"
+        "que eu escrevi em CORREÇÃO.\n"
+        "\n"
         "Como preencher (uma linha por campo):\n"
         "  DECISÃO:  OK        o item está certo, fica como está\n"
         "            CORRIGIR  escreva o texto certo em CORREÇÃO\n"
@@ -104,6 +111,8 @@ def _bloco(numero: int, pendencia: dict) -> str:
     ]
     # Pendência de várias linhas (ex.: "Mais um/uma" + a linha anterior):
     # uma linha "Item:" para cada uma.
+    if pendencia.get("tipo"):
+        linhas.append(f"Tipo: {pendencia['tipo']}")
     linhas += [f"Item: {linha}" for linha in pendencia.get("texto", "").split("\n")]
     if pendencia.get("situacao"):
         linhas.append(f"Situação: {pendencia['situacao']}")
@@ -174,6 +183,25 @@ def aplicar_no_texto(texto_categoria: str, categoria: str, pendencia: dict) -> t
     linhas = [linha for linha in texto_categoria.split("\n") if linha.strip()] or [vazio]
 
     itens = [item for item in pendencia.get("texto", "").split("\n") if item.strip()]
+
+    # Pendência de item FALTANDO (vem da conferência do conferir.py): a
+    # linha em "Item:" é uma proposta que ainda NÃO está no laudo, então
+    # não adianta procurá-la no texto. OK aceita a proposta, CORRIGIR
+    # aceita com o texto do vistoriador, REMOVER descarta.
+    if pendencia.get("tipo") == "falta":
+        if pendencia["decisao"] == "REMOVER":
+            return texto_categoria, None
+        novas = itens
+        if pendencia["decisao"] == "CORRIGIR":
+            novas = [normalizar_linha(linha)
+                     for linha in pendencia.get("correcao", "").split("\n") if linha.strip()]
+            if not novas:
+                return texto_categoria, "DECISÃO é CORRIGIR, mas CORREÇÃO está vazia"
+        reais = [linha for linha in linhas
+                 if linha not in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)]
+        reais += [linha for linha in novas if linha not in reais]
+        return "\n".join(reais) if reais else vazio, None
+
     if not itens or any(item not in linhas for item in itens):
         return texto_categoria, (
             "item não encontrado no laudo (o texto pode ter mudado, ex.: pelo "

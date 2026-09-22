@@ -407,6 +407,133 @@ def montar_prompt_revisao(laudo_json: str, categorias: list, notas_extras: str =
     )
 
 
+def montar_prompt_inventario(
+    nome_comodo: str, quantidade_fotos: int, quantidade_imagens: int, notas_extras: str = ""
+) -> str:
+    """Passo 1 da conferência: o modelo LISTA tudo o que vê no cômodo, sem
+    ver o laudo.
+
+    Por que sem o laudo: em 22/09/2026 tentei o caminho direto — mandar as
+    fotos junto com o texto pronto e pedir "aponte as divergências". O
+    modelo devolveu lista vazia nos dois cômodos testados, inclusive num
+    que tinha erro grosseiro (teto descrito como forro de PVC sendo laje
+    pintada). Lendo o texto ele concorda com o texto. Listar o que vê, sem
+    nada para concordar, ele faz bem: o mesmo cômodo devolveu 31 itens,
+    com peitoril, registro e o vidro fumê do box que o laudo não tinha."""
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel (valem como verdade):\n"
+            f"{notas_extras.strip()}\n\n"
+        )
+
+    if quantidade_imagens < quantidade_fotos:
+        descricao_imagens = (
+            f"As imagens são {quantidade_imagens} folhas de contato: cada uma traz "
+            f"VÁRIAS fotos deste cômodo lado a lado, {quantidade_fotos} fotos no "
+            "total. Olhe cada miniatura."
+        )
+    else:
+        descricao_imagens = f"São {quantidade_fotos} fotos deste cômodo."
+
+    return (
+        f"Cômodo: {nome_comodo}\n\n"
+        f"{bloco_notas}"
+        f"{descricao_imagens}\n\n"
+        "Faça o INVENTÁRIO do cômodo: liste TUDO o que aparece nas fotos, "
+        "item por item. Não é o laudo — é lista de conferência, para nada "
+        "ficar de fora.\n\n"
+        "Seja exaustivo, principalmente em:\n"
+        "- louças e metais: bacia sanitária, cuba, torneira, chuveiro, "
+        "ducha higiênica, registro, sifão, engate;\n"
+        "- mobília fixa: cada armário, gabinete, bancada, prateleira, "
+        "nicho, espelho, box;\n"
+        "- pontos elétricos: cada ponto de luz, cada placa, quadro de "
+        "disjuntores, interfone;\n"
+        "- esquadrias: porta, janela, batente, vistas, soleira, peitoril;\n"
+        "- acabamentos: parede, piso, teto, rodapé, faixa decorativa;\n"
+        "- acessórios: porta-toalha, porta-papel, saboneteira, cabide, "
+        "varal, corrimão.\n\n"
+        "CUIDADO com armadilha de foto: foto tirada de lado (o cômodo "
+        "aparece deitado) e REFLEXO em espelho ou vidro. Não liste como "
+        "item novo o que é reflexo de algo que já está no cômodo, nem "
+        "confunda uma porta fotografada deitada com um armário.\n\n"
+        "Para cada item devolva a categoria (paredes, piso, teto, porta, "
+        "janela, eletrico, mobilia, obs), o item em poucas palavras com "
+        "material e cor, e a certeza de 0 a 100 de que ele está mesmo ali.\n\n"
+        f"{INSTRUCAO_CERTEZA.strip()}\n\n"
+        "Responda APENAS com um objeto JSON válido, sem markdown: "
+        '{"inventario": [{"categoria": "...", "item": "...", "certeza": 0}]}'
+    )
+
+
+def montar_prompt_divergencias(
+    nome_comodo: str, texto_laudo: str, inventario: list, notas_extras: str = ""
+) -> str:
+    """Passo 2 da conferência: TEXTO PURO (sem fotos, custa quase nada).
+    Compara o inventário do passo 1 com o laudo já escrito e devolve o que
+    não bate."""
+    lista = "\n".join(
+        f"- [{item.get('categoria', '?')}] {item.get('item', '')}"
+        for item in inventario
+    )
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel (valem como verdade):\n"
+            f"{notas_extras.strip()}\n\n"
+        )
+
+    return (
+        f"{_regras()}\n\n"
+        f"Cômodo: {nome_comodo}\n\n"
+        f"{bloco_notas}"
+        "INVENTÁRIO — o que foi visto nas fotos deste cômodo:\n"
+        f"{lista}\n\n"
+        "LAUDO — o texto que já está escrito para este cômodo:\n"
+        "-----\n"
+        f"{texto_laudo.strip()}\n"
+        "-----\n\n"
+        "Compare os dois e devolva SOMENTE o que não bate, de dois tipos:\n"
+        '- "falta" (o mais importante): item do inventário que o laudo não '
+        "descreve de jeito nenhum — ex.: um peitoril, um registro, um "
+        "varal, uma prateleira. Atenção: o laudo costuma juntar vários "
+        "itens numa linha só (a torneira e o sifão aparecem dentro da linha "
+        "da cuba) — isso NÃO é item faltando. Só aponte o que realmente não "
+        "está lá.\n"
+        '- "errado": o inventário AFIRMA, sobre o mesmo item, material, '
+        "cor, tipo ou quantidade diferente do que o laudo escreveu (ex.: "
+        "laudo diz forro de PVC e o inventário diz laje pintada).\n\n"
+        "REGRAS DA COMPARAÇÃO — leia com atenção, elas evitam estrago:\n"
+        "- O inventário é uma lista rápida, MENOS detalhada que o laudo. "
+        "Item que o inventário não cita NÃO é prova de que não existe. "
+        "Silêncio do inventário nunca é divergência.\n"
+        "- A conferência não encurta o laudo. Nunca proponha remover item, "
+        'nunca sugira "Não se aplica." ou "Sem observações." como '
+        "correção, e nunca troque uma linha detalhada por uma mais pobre.\n"
+        "- A linha sugerida tem que MANTER tudo o que já estava na linha do "
+        "laudo, mudando só o fato que conflita.\n"
+        "- Defeito que já está escrito no laudo (trinca, estufamento, "
+        "mancha, quebra) FICA. Ele foi confirmado por quem esteve no "
+        "imóvel; não sugira tirar porque o inventário não citou.\n"
+        "- Diferença só de redação (mesma coisa dita com outras palavras) "
+        "NÃO é divergência.\n\n"
+        "Para cada um devolva:\n"
+        '- "categoria": paredes, piso, teto, porta, janela, eletrico, '
+        "mobilia ou obs;\n"
+        '- "tipo": "falta" ou "errado";\n'
+        '- "linha_atual": em "errado", a linha do LAUDO copiada '
+        'EXATAMENTE, caractere por caractere (em "falta", string vazia);\n'
+        '- "linha_sugerida": a linha pronta para entrar no laudo, no padrão '
+        'de escrita acima, começando com "*";\n'
+        '- "o_que_vi": em uma frase, o que no inventário sustenta isso;\n'
+        '- "certeza": 0 a 100.\n\n'
+        "Se o laudo já cobre tudo, devolva a lista vazia.\n\n"
+        "Responda APENAS com um objeto JSON válido, sem markdown: "
+        '{"divergencias": [...]}'
+    )
+
+
 def montar_prompt_correcao(nome_comodo: str, itens: list, notas_extras: str = "") -> str:
     """Prompt da SEGUNDA OLHADA: as mesmas fotos do cômodo, mas focado só
     nos itens que saíram com certeza muito baixa (até

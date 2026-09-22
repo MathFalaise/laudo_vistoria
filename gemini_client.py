@@ -12,18 +12,21 @@ from google import genai
 from google.genai import errors, types
 
 from config import (API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA,
-                    LIMIAR_CORRECAO_AUTOMATICA, ROTULOS_CATEGORIA)
+                    LIMIAR_CONFERENCIA, LIMIAR_CORRECAO_AUTOMATICA,
+                    ROTULOS_CATEGORIA)
 from report_writer import (
     TEXTO_NAO_SE_APLICA,
     TEXTO_SEM_OBSERVACOES,
     grupos_de_itens_repetidos,
     limpar_testes_indevidos,
     linha_com_mais_um,
+    montar_texto_comodo,
     normalizar_linha,
     texto_vazio_da_categoria,
 )
 from style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
-                         montar_prompt_correcao, montar_prompt_revisao)
+                         montar_prompt_correcao, montar_prompt_divergencias,
+                         montar_prompt_inventario, montar_prompt_revisao)
 
 # Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
 # sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
@@ -42,6 +45,13 @@ MOTIVO_REPETIDOS = (
     'linha começando com "Mais um/uma", e a correção automática não '
     "resolveu — junte com a linha anterior numa só, com a quantidade total "
     '(ex.: "*Duas portas ...", "*Três armários ..., sendo ...")'
+)
+
+# Justificativa de conferência baseada no SILÊNCIO do inventário — ver
+# conferir_comodo.
+_ARGUMENTO_DE_AUSENCIA = re.compile(
+    r"n[ãa]o\s+(menciona|cita|lista|informa|aponta|detalha|descreve|traz|"
+    r"registra|faz\s+men[çc][ãa]o)", re.IGNORECASE
 )
 
 # Item que passou pela segunda olhada nas fotos e MESMO ASSIM ficou com
@@ -212,6 +222,171 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
     menos_certa = min(sumiram or registros, key=lambda registro: registro[1])
     herdada = (menos_certa[1], menos_certa[2])
     return [(linha, *originais.get(linha, herdada)) for linha in novas]
+
+
+def _schema_inventario() -> types.Schema:
+    item = types.Schema(
+        type="OBJECT",
+        properties={
+            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
+            "item": types.Schema(type="STRING"),
+            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+        },
+        required=["categoria", "item", "certeza"],
+        property_ordering=["categoria", "item", "certeza"],
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={"inventario": types.Schema(type="ARRAY", items=item, min_items=1)},
+        required=["inventario"],
+    )
+
+
+def _schema_divergencias() -> types.Schema:
+    item = types.Schema(
+        type="OBJECT",
+        properties={
+            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
+            "tipo": types.Schema(type="STRING", enum=["falta", "errado"]),
+            "linha_atual": types.Schema(type="STRING"),
+            "linha_sugerida": types.Schema(type="STRING"),
+            "o_que_vi": types.Schema(type="STRING"),
+            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+        },
+        required=["categoria", "tipo", "linha_atual", "linha_sugerida", "o_que_vi", "certeza"],
+        property_ordering=["categoria", "tipo", "linha_atual", "linha_sugerida",
+                           "o_que_vi", "certeza"],
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={"divergencias": types.Schema(type="ARRAY", items=item)},
+        required=["divergencias"],
+    )
+
+
+def conferir_comodo(
+    cliente: genai.Client,
+    mosaicos: list,
+    nome_comodo: str,
+    dados: dict,
+    quantidade_fotos: int,
+    notas_extras: str = "",
+) -> list:
+    """CONFERÊNCIA de um cômodo já escrito, em DOIS passos:
+
+    1. com as fotos (em mosaico, barato), o modelo faz o INVENTÁRIO do que
+       vê — sem ver o laudo;
+    2. numa chamada de TEXTO PURO, compara o inventário com o laudo e
+       devolve o que não bate.
+
+    A ordem importa. Mandar fotos + laudo juntos e pedir "aponte as
+    divergências" foi testado em 22/09/2026 e devolveu lista VAZIA em dois
+    cômodos, um deles com erro grosseiro no teto: lendo o texto, o modelo
+    concorda com o texto. Listando o que vê, ele acha.
+
+    Devolve pendências prontas para validacao.salvar_pendencias:
+    - "falta" vira pendência tipo="falta" (a linha sugerida ainda não está
+      no laudo; o vistoriador aceita com OK);
+    - "errado" vira pendência normal, ancorada na linha atual, com a
+      sugestão já preenchida em CORREÇÃO.
+
+    Descarta o que vier com certeza abaixo de config.LIMIAR_CONFERENCIA e o
+    que citar uma linha que não existe no laudo — pendência que não bate com
+    o texto só atrapalha na hora de aplicar."""
+    texto_laudo = montar_texto_comodo(nome_comodo, dados)
+
+    bruto = _gerar_com_retry(
+        cliente,
+        list(mosaicos) + [montar_prompt_inventario(
+            nome_comodo, quantidade_fotos, len(mosaicos), notas_extras)],
+        response_schema=_schema_inventario(),
+        max_output_tokens=8192,
+        descricao_erro=f"o inventário do cômodo '{nome_comodo}'",
+    )
+    inventario = [
+        item for item in _extrair_json(bruto).get("inventario", [])
+        if isinstance(item, dict) and str(item.get("item", "")).strip()
+    ]
+    if not inventario:
+        print("  Conferência: inventário vazio, nada a comparar.", flush=True)
+        return []
+
+    bruto = _gerar_com_retry(
+        cliente,
+        [montar_prompt_divergencias(nome_comodo, texto_laudo, inventario, notas_extras)],
+        response_schema=_schema_divergencias(),
+        max_output_tokens=8192,
+        descricao_erro=f"a comparação do inventário de '{nome_comodo}'",
+    )
+    divergencias = _extrair_json(bruto).get("divergencias", [])
+
+    pendencias, descartadas = [], 0
+    for divergencia in divergencias:
+        categoria = divergencia.get("categoria")
+        if categoria not in CATEGORIAS:
+            descartadas += 1
+            continue
+        try:
+            certeza = int(divergencia.get("certeza", 0))
+        except (TypeError, ValueError):
+            certeza = 0
+        if certeza < LIMIAR_CONFERENCIA:
+            descartadas += 1
+            continue
+
+        # A sugestão passa pelas mesmas travas do laudo: ela entra no texto
+        # se o vistoriador aceitar, então não pode chegar com "paredes
+        # testadas e em funcionamento" (aconteceu na primeira rodada).
+        sugerida = limpar_testes_indevidos(
+            categoria, normalizar_linha(str(divergencia.get("linha_sugerida", "")))
+        )
+        visto = " ".join(str(divergencia.get("o_que_vi", "")).split())
+        # "O inventário não menciona X" não é divergência: o inventário é
+        # uma lista mais pobre que o laudo, e silêncio dele não prova
+        # ausência. Mesmo com a regra no prompt, o modelo insiste — na
+        # R. Correia de Freitas quis tirar a "chave fixa" da porta do
+        # banheiro (que o vistoriador tinha confirmado) com esse argumento.
+        if _ARGUMENTO_DE_AUSENCIA.search(visto):
+            descartadas += 1
+            continue
+        linhas_laudo = [l for l in dados.get(categoria, "").split("\n") if l.strip()]
+
+        if divergencia.get("tipo") == "falta":
+            if not sugerida or sugerida in linhas_laudo:
+                descartadas += 1
+                continue
+            pendencias.append({
+                "comodo": nome_comodo, "categoria": categoria, "tipo": "falta",
+                "texto": sugerida, "certeza": certeza,
+                "motivo": f"CONFERÊNCIA — a foto mostra e o laudo não tem: {visto}",
+            })
+            continue
+
+        atual = normalizar_linha(str(divergencia.get("linha_atual", "")))
+        if atual not in linhas_laudo:
+            descartadas += 1
+            continue
+        # A conferência não encurta o laudo. O inventário é uma lista mais
+        # pobre que o texto, e o modelo tentou usar o silêncio dele como
+        # prova de ausência: na R. Correia de Freitas sugeriu apagar a
+        # trinca e o estufamento que o vistoriador tinha confirmado, e
+        # trocar linhas detalhadas por versões curtas. Sugestão que remove
+        # ou empobrece a linha é descartada aqui, não vai nem a pendência.
+        if (not sugerida
+                or sugerida in (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES)
+                or len(sugerida) < 0.75 * len(atual)):
+            descartadas += 1
+            continue
+        pendencias.append({
+            "comodo": nome_comodo, "categoria": categoria,
+            "texto": atual, "certeza": certeza,
+            "motivo": f"CONFERÊNCIA — o laudo não bate com a foto: {visto}",
+            "correcao": sugerida if sugerida != atual else "",
+        })
+
+    print(f"  Conferência: {len(inventario)} itens vistos, {len(pendencias)} divergência(s)"
+          + (f", {descartadas} descartada(s)" if descartadas else ""), flush=True)
+    return pendencias
 
 
 def _corrigir_itens_incertos(

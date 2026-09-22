@@ -65,6 +65,15 @@ def main():
             "pendências que já têm."
         ),
     )
+    parser.add_argument(
+        "--sem-conferencia",
+        action="store_true",
+        help=(
+            "Não roda a conferência das fotos contra o laudo no fim (ver "
+            "conferir.py). Só use se precisar economizar a chamada extra — "
+            "é ela que pega item que ficou de fora do laudo."
+        ),
+    )
     args = parser.parse_args()
 
     todos = listar_pastas_comodo(args.pasta_imovel)
@@ -121,7 +130,28 @@ def main():
         caminho_completo = salvar_relatorio_completo(args.pasta_imovel, resultados)
         print(f"\nLaudo completo salvo em: {caminho_completo}")
 
+        # Conferência: com o texto pronto, o modelo olha as fotos de novo e
+        # aponta o que ficou de fora ou não bate. Roda por padrão porque a
+        # primeira leitura, sozinha, já deixou passar chuveiro, armário e
+        # varal inteiros (R. Correia de Freitas, 22/09/2026). Custa cerca de
+        # 1/4 da geração, graças aos mosaicos — ver conferir.py.
+        if not args.sem_conferencia:
+            # Import aqui dentro de propósito: conferir.py importa
+            # listar_pastas_comodo deste módulo, e no topo os dois se
+            # importariam em círculo.
+            from conferir import conferir_imovel
+
+            print(f"\nConferindo o laudo contra as fotos ({len(processados)} cômodo(s))...")
+            pendencias.extend(
+                conferir_imovel(
+                    args.pasta_imovel,
+                    [nome for nome in todos if nome in processados],
+                    args.notas,
+                )
+            )
+
         anteriores = [p for p in iniciais if p.get("comodo") not in processados]
+        caminho_pendencias = salvar_pendencias(args.pasta_imovel, anteriores + pendencias)
         _avisar_pendencias(anteriores + pendencias, caminho_pendencias, args.pasta_imovel)
 
     if falhas:
