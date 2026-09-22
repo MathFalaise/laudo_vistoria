@@ -85,14 +85,16 @@ regras de formatação:
   ("*Três placas ..., testadas e em funcionamento, em bom estado.").
   Quando confirmarem os testes HIDRÁULICOS, faça o mesmo com cada peça
   hidráulica (torneira, misturador, chuveiro, ducha, ducha higiênica,
-  descarga, registro, tanque), logo depois da peça dentro da linha:
+  descarga, registro), logo depois da peça dentro da linha:
   "...torneira monocomando em metal cromado, testada e em funcionamento,
   sifão em PVC...".
   "Testado e em funcionamento" vale SÓ para esses dois grupos: item
   elétrico e peça hidráulica. NUNCA escreva isso em parede, piso, teto,
   porta, janela, soleira, rodapé, nem em mobília sem função elétrica ou
   hidráulica (armário, gabinete, bancada, espelho, box, prateleira,
-  porta-toalha, porta-papel, saboneteira, cabide). Parede não é testada:
+  porta-toalha, porta-papel, saboneteira, cabide). Também não se testa a
+  peça que só recebe água — tanque, bancada, cuba, pia: o que é testado ali
+  é a torneira ou o registro. Parede não é testada:
   se as notas confirmarem os testes, isso NÃO muda o texto dessas
   categorias.
 - Se a categoria não tiver nada a relatar naquele cômodo (por exemplo, um

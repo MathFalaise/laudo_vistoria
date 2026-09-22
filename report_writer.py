@@ -95,9 +95,12 @@ _CATEGORIAS_SEM_TESTE = ("paredes", "piso", "teto", "porta", "janela", "obs")
 
 # Em Mobília, só a peça elétrica ou hidráulica é testada; armário, bancada,
 # espelho, box e acessório, não.
+# "tanque", "bancada", "cuba" e "pia" ficaram DE FORA de propósito: elas só
+# recebem água, quem é testado é a torneira/registro que está na mesma linha
+# (regra do vistoriador, 22/09/2026).
 _ITENS_TESTAVEIS = (
     "torneira", "misturador", "chuveiro", "ducha", "registro", "descarga",
-    "caixa acoplada", "válvula", "tanque", "aquecedor", "bidê", "filtro",
+    "caixa acoplada", "válvula", "aquecedor", "bidê", "filtro",
     "interfone", "campainha", "ventilador", "exaustor", "depurador",
     "cooktop", "coifa", "forno", "aquecimento",
 )

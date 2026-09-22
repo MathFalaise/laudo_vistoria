@@ -14,3 +14,7 @@
 - Quando o cômodo não tiver teto (área externa descoberta), responda "Não se aplica." na categoria Teto — não descreva laje ou cobertura que não existe. Havendo beiral, telhado aparente ou forro, descreva o que aparece na foto.
 - Releia as informações confirmadas do imóvel antes de fechar cada cômodo. Cor e acabamento informados na nota valem em todos os cômodos onde se aplicam: sombra, contraluz ou tom diferente na foto NÃO são motivo para mudar a cor informada.
 - Defeito citado nas notas para um item específico (ex.: cortina com rasgos) tem que aparecer na linha daquele item, não só na OBS.
+
+# adotadas em 22/09/2026
+- Nunca escreva material em dúvida com "ou" (ex.: "granito ou mármore", "cimento queimado ou pedra"). O laudo afirma o que dá para identificar: se não dá para saber o material, descreva o que se vê (cor, acabamento, formato) e deixe o material de fora.
+- Tanque, bancada, cuba e pia não são testados — o que se testa é a torneira, o registro, o chuveiro e a descarga. Não escreva "testado e em funcionamento" na peça que só recebe água.
