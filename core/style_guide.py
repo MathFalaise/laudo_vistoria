@@ -298,9 +298,37 @@ def carregar_regras_validadas() -> list:
     return regras
 
 
+# Regras injetadas por quem chama, em vez de lidas do arquivo. É o que a
+# aplicação web usa: em produção as regras adotadas vivem no banco (regra 23
+# do pedido), não no repositório, porque o repositório é público e porque
+# várias instalações não podem escrever umas por cima das outras.
+#
+# `None` (o padrão) significa "leia o arquivo", que é o comportamento do CLI.
+# Uma lista vazia NÃO é o mesmo que None: ela significa "nenhuma regra
+# adotada", e é resposta legítima de um banco recém-criado.
+_regras_injetadas: list | None = None
+
+
+def definir_regras_extras(regras: list | None) -> None:
+    """Define as regras adotadas sem passar pelo arquivo.
+
+    Chamar com None devolve o comportamento de ler regras_validadas.txt."""
+    global _regras_injetadas
+    _regras_injetadas = None if regras is None else [
+        " ".join(str(regra).split()) for regra in regras if str(regra).strip()
+    ]
+
+
+def regras_em_vigor() -> list:
+    """As regras que vão entrar no próximo prompt, venham de onde vierem."""
+    if _regras_injetadas is not None:
+        return list(_regras_injetadas)
+    return carregar_regras_validadas()
+
+
 def _regras() -> str:
     """REGRAS_GERAIS + as regras adotadas pelo vistoriador, se houver."""
-    regras = carregar_regras_validadas()
+    regras = regras_em_vigor()
     if not regras:
         return REGRAS_GERAIS.strip()
     adotadas = "\n".join(f"- {regra}" for regra in regras)

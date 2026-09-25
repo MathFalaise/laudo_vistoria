@@ -130,14 +130,31 @@ def conflitos_para_pendencias(nome_comodo: str, conflitos: list) -> list:
     return pendencias
 
 
+def _caminhos_das_fotos(pasta_comodo: str | None, caminhos: list | None) -> list:
+    """As fotos de um cômodo, vindas de uma pasta ou de uma lista explícita.
+
+    O CLI tem uma pasta por cômodo; a aplicação web guarda as fotos por UUID,
+    numa árvore que não tem nada a ver com o nome do cômodo. Os dois entram
+    aqui e saem iguais, para que o motor seja o mesmo (regra 30 do pedido)."""
+    if caminhos is not None:
+        return list(caminhos)
+    if not pasta_comodo:
+        return []
+    return listar_fotos(pasta_comodo)
+
+
 def processar_comodo_classico(
-    cliente, pasta_comodo: str, nome_comodo: str, notas_extras: str = ""
+    cliente,
+    pasta_comodo: str | None = None,
+    nome_comodo: str = "",
+    notas_extras: str = "",
+    caminhos: list | None = None,
 ) -> ResultadoComodo:
     """Motor original: UMA chamada por cômodo, fotos direto para o laudo.
 
     Mantido intacto e testado — é o que gerou todas as vistorias reais até
     24/09/2026."""
-    caminhos = listar_fotos(pasta_comodo)
+    caminhos = _caminhos_das_fotos(pasta_comodo, caminhos)
     if not caminhos:
         return ResultadoComodo(nome_comodo=nome_comodo, dados={}, incertos=[])
 
@@ -151,11 +168,12 @@ def processar_comodo_classico(
 
 def processar_comodo_evidencias(
     cliente,
-    pasta_comodo: str,
-    nome_comodo: str,
+    pasta_comodo: str | None = None,
+    nome_comodo: str = "",
     notas_extras: str = "",
     ids_fotos: list | None = None,
     progresso=None,
+    caminhos: list | None = None,
 ) -> ResultadoComodo:
     """Motor novo: fotos -> evidências -> escopo validado -> laudo.
 
@@ -168,7 +186,7 @@ def processar_comodo_evidencias(
     saída caber em max_output_tokens (uma lista de evidências de 60 fotos não
     cabe) e para o modelo não diluir a atenção. O custo extra é o texto do
     prompt repetido por lote, não uma segunda leitura das imagens."""
-    caminhos = listar_fotos(pasta_comodo)
+    caminhos = _caminhos_das_fotos(pasta_comodo, caminhos)
     if not caminhos:
         return ResultadoComodo(nome_comodo=nome_comodo, dados={}, incertos=[])
 
@@ -249,20 +267,28 @@ def processar_comodo_evidencias(
 
 def processar_comodo(
     cliente,
-    pasta_comodo: str,
-    nome_comodo: str,
+    pasta_comodo: str | None = None,
+    nome_comodo: str = "",
     notas_extras: str = "",
     usar_evidencias: bool | None = None,
     ids_fotos: list | None = None,
     progresso=None,
+    caminhos: list | None = None,
 ) -> ResultadoComodo:
-    """Ponto de entrada único. Escolhe o motor e devolve sempre a mesma coisa."""
+    """Ponto de entrada único. Escolhe o motor e devolve sempre a mesma coisa.
+
+    É por aqui que passam o CLI e a API web — não existe um caminho para cada
+    (regra 30). A diferença entre os dois é só de onde vêm as fotos e para
+    onde vai o resultado."""
     from core.config import USAR_MOTOR_DE_EVIDENCIAS
 
     if usar_evidencias is None:
         usar_evidencias = USAR_MOTOR_DE_EVIDENCIAS
     if usar_evidencias:
         return processar_comodo_evidencias(
-            cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos, progresso
+            cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
+            progresso, caminhos,
         )
-    return processar_comodo_classico(cliente, pasta_comodo, nome_comodo, notas_extras)
+    return processar_comodo_classico(
+        cliente, pasta_comodo, nome_comodo, notas_extras, caminhos
+    )
