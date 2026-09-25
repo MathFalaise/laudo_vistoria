@@ -1,51 +1,57 @@
 """
-EVIDÊNCIAS E ESCOPO — a camada que responde, para cada coisa vista numa foto,
-a pergunta que o motor antigo não fazia:
+EVIDÊNCIAS E ESCOPO — V2.
 
-    "isso pertence mesmo ao cômodo que estou analisando?"
-
-Por que existe
---------------
-A arquitetura antiga era, conceitualmente, FOTO -> LAUDO: tudo o que aparecia
-numa foto guardada na pasta "Cozinha" virava afirmação sobre a cozinha. Só que
-a foto da cozinha enquadra a porta, e pela porta se vê o corredor; o espelho
-do banheiro reflete o quarto; a última foto do quarto pega meia parede da
-sala. O modelo então descrevia como "parede da cozinha" uma parede que é do
-corredor — e o laudo, que é documento assinado, saía com um falso positivo.
-
-Isso NÃO se resolve escrevendo mais parágrafos no prompt (já se tentou). O
-pertencimento ao cômodo tem que ser uma VARIÁVEL do sistema, com estado,
-validação determinística e rastro — não uma esperança depositada no texto do
-prompt. É o que este módulo faz:
+Responde, para cada coisa vista numa foto, a pergunta que o motor original não
+fazia: "isso pertence mesmo ao cômodo que estou analisando?"
 
     FOTO -> ANÁLISE DA FOTO -> EVIDÊNCIAS -> VALIDAÇÃO DE ESCOPO
-         -> CONSOLIDAÇÃO -> LAUDO -> CONFERÊNCIA -> VALIDAÇÃO HUMANA
+         -> TAXONOMIA CANÔNICA -> COBERTURA -> CONSOLIDAÇÃO -> LAUDO
+         -> CONFERÊNCIA -> VALIDAÇÃO HUMANA
 
-Divisão de trabalho (regra 37/38 do pedido: prompt orienta, código protege)
---------------------------------------------------------------------------
-O MODELO só é consultado sobre o que exige olho: o que aparece na foto, se a
-foto é do cômodo, se aquilo é reflexo, quanta certeza ele tem. Ele PROPÕE.
+O que a V1 provou e o que ela errou
+-----------------------------------
+A V1 acertou o princípio: separar "o que vi" de "isso é daqui" impede que a
+parede do corredor, vista pela porta da cozinha, vire parede da cozinha. No
+benchmark de 107 fotos ela pegou um ar-condicionado inteiro que o motor
+clássico perdeu, corrigiu a bacia sanitária e o tipo da porta, e descartou o
+reflexo que teria criado um terceiro criado-mudo.
 
-O CÓDIGO decide o que disso pode virar texto do laudo. Nenhuma regra deste
-módulo depende de o modelo ter obedecido a alguma instrução: evidência de
-reflexo é descartada aqui, não "pedida para não usar"; evidência de ambiente
-adjacente vira pendência aqui; item sem evidência não é escrito.
+E errou de dois jeitos, os dois corrigidos aqui:
 
-O que NÃO se faz aqui
----------------------
-Nada é apagado. Foto fora de escopo continua no disco e no banco, com o motivo
-registrado — a auditoria precisa poder discordar. Evidência descartada também
-fica: ela só perde o direito de alimentar a redação.
+1. **Foi conservadora demais com a FRONTEIRA.** Soleira, peitoril e
+   porta-janela ficam entre dois ambientes por natureza; a V1 leu isso como
+   "ambiente adjacente" e o laudo perdeu a soleira do BWC e a categoria
+   Janela inteira do Quarto Suíte. Agora existe `Escopo.FRONTEIRA`, e o
+   CÓDIGO promove elemento de fronteira que o modelo tenha rebaixado
+   (`core.taxonomia.e_elemento_de_fronteira`).
+
+2. **Resumiu demais.** Porta-papel, ganchos e porta-toalha sumiram na
+   consolidação. A V2 pede inventário EXAUSTIVO, guarda instância por
+   instância, e a cobertura (`core.cobertura`) reclama do que faltar.
+
+Divisão de trabalho (pedido, item 44)
+-------------------------------------
+O MODELO só é consultado sobre o que exige olho. Ele PROPÕE.
+O CÓDIGO decide o que disso vira texto — e nada aqui depende de o modelo ter
+obedecido a alguma instrução do prompt.
 """
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 
 from core.config import CATEGORIAS
+from core.taxonomia import (
+    ESCOPOS_QUE_ALIMENTAM_O_LAUDO,
+    Escopo,
+    atributos_conflitantes,
+    categoria_canonica,
+    e_cenario_alem_da_abertura,
+    e_elemento_de_fronteira,
+    escopo_de_texto,
+    normalizar_valor,
+)
 
 # --------------------------------------------------------------------------
 # Limiares. Ficam SÓ no código, nunca no prompt — mesma razão do
@@ -53,43 +59,39 @@ from core.config import CATEGORIAS
 # --------------------------------------------------------------------------
 
 # Abaixo disto, "isso pertence a este cômodo" não sustenta uma afirmação de
-# laudo. Alto de propósito: a regra 16 do pedido diz que falso positivo é pior
-# que falso negativo, e atribuir ao cômodo errado é o falso positivo mais caro
-# que este sistema produz.
+# laudo. Não se aplica a elemento de fronteira promovido pelo código: ali o
+# pertencimento foi decidido estruturalmente, não por nota do modelo.
 PISO_CONFIANCA_ESCOPO = 70
 
 # Abaixo disto, nem como observação duvidosa vale a pena — é ruído de leitura.
 PISO_CONFIANCA_PERCEPCAO = 50
 
-# Uma evidência que aparece em MAIS DE UMA foto é mais forte que a mesma
-# evidência vista uma vez só. O bônus é pequeno e limitado (ver
-# _aplicar_corroboracao): corroboração não cria pertencimento.
+# Corroboração entre FOTOS diferentes melhora a percepção, nunca o escopo.
 BONUS_CORROBORACAO = 5
 MAX_BONUS_CORROBORACAO = 10
 
-# Foto que o modelo classificou como PARCIAL (mostra o cômodo, mas também
-# ambiente vizinho ou região ambígua) sustenta evidência, com desconto.
+# Evidência que veio de foto marcada como parcialmente do cômodo.
 PENALIDADE_FOTO_PARCIAL = 10
 
-# Evidência envolvida em contradição não resolvida entre fotos.
+# Evidência envolvida em contradição de atributo não resolvida.
 PENALIDADE_CONTRADICAO = 25
 
 
 class EscopoFoto(str, Enum):
-    """Classificação de uma foto em relação ao cômodo que está sendo escrito.
+    """Classificação da FOTO (a da evidência é `Escopo`, mais fina).
 
-    A foto NUNCA é apagada por causa disto (regra 7 do pedido) — o que muda é
-    se ela pode ser usada como evidência."""
+    A foto nunca é apagada por causa disto — o que muda é se ela pode
+    alimentar o laudo."""
 
-    VALIDA = "valid"                  # é do cômodo, pode alimentar o laudo
-    PARCIAL = "partial"               # é do cômodo, mas tem vizinho/ambiguidade
-    FORA_DE_ESCOPO = "out_of_scope"   # não alimenta o laudo deste cômodo
+    VALIDA = "valid"
+    PARCIAL = "partial"
+    FORA_DE_ESCOPO = "out_of_scope"
 
 
 class StatusEvidencia(str, Enum):
-    ACEITA = "aceita"                 # entra na redação
-    DESCARTADA = "descartada"         # não entra; motivo registrado
-    EM_CONFLITO = "em_conflito"       # não entra sozinha; vira pendência
+    ACEITA = "aceita"
+    DESCARTADA = "descartada"
+    EM_CONFLITO = "em_conflito"
 
 
 class MotivoDescarte(str, Enum):
@@ -98,21 +100,32 @@ class MotivoDescarte(str, Enum):
 
     FOTO_FORA_DE_ESCOPO = "foto_fora_de_escopo"
     AMBIENTE_ADJACENTE = "ambiente_adjacente"
+    EXTERIOR = "exterior"
     REFLEXO = "reflexo"
+    AMBIGUO = "ambiguo"
     ESCOPO_INSUFICIENTE = "escopo_insuficiente"
     PERCEPCAO_INSUFICIENTE = "percepcao_insuficiente"
-    CATEGORIA_INVALIDA = "categoria_invalida"
     OBSERVACAO_VAZIA = "observacao_vazia"
     CONTRADICAO = "contradicao"
 
 
+class TipoConflito(str, Enum):
+    """Tipos de pendência que esta camada sabe gerar (pedido, item 38)."""
+
+    ESCOPO = "scope_conflict"
+    ATRIBUTO = "attribute_conflict"
+    CATEGORIA = "category_conflict"
+    CONTAGEM = "count_uncertain"
+    COBERTURA = "possible_uncovered_item"
+
+
 @dataclass(frozen=True)
 class Regiao:
-    """Região aproximada da foto, em fração do lado (0.0 a 1.0).
+    """Região aproximada na foto, em fração do lado (0.0 a 1.0).
 
-    Regra 9 do pedido: se o modelo não souber onde está, NÃO inventa — o campo
-    fica None. Uma região errada é pior que região nenhuma, porque a tela de
-    auditoria desenharia um retângulo em cima da coisa errada."""
+    Se o modelo não souber onde está, o campo fica None — região errada é pior
+    que região nenhuma, porque a tela de auditoria desenharia um retângulo em
+    cima da coisa errada (pedido, item 35)."""
 
     x: float
     y: float
@@ -124,12 +137,11 @@ class Regiao:
         if not isinstance(dados, dict):
             return None
         try:
-            valores = [float(dados[chave]) for chave in ("x", "y", "largura", "altura")]
+            x, y, largura, altura = (
+                float(dados[chave]) for chave in ("x", "y", "largura", "altura")
+            )
         except (KeyError, TypeError, ValueError):
             return None
-        # Uma região degenerada (largura ou altura zero) ou fora da imagem é
-        # palpite malfeito, não localização.
-        x, y, largura, altura = valores
         if largura <= 0 or altura <= 0:
             return None
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
@@ -159,76 +171,104 @@ class AnaliseFoto:
 
 @dataclass
 class Evidencia:
-    """Uma coisa vista numa foto, ainda não escrita no laudo.
+    """Uma coisa vista numa foto, ainda NÃO escrita no laudo.
 
-    Note os DOIS níveis de confiança (regra 14 do pedido). O motor antigo
-    tinha um número só, e ele misturava duas perguntas muito diferentes:
-    "está claro na imagem?" e "é deste cômodo?". Uma parede de corredor pode
-    estar nitidíssima na foto da cozinha — percepção 99, escopo 10."""
+    Duas confianças separadas (pedido, item 6), porque são perguntas
+    diferentes: uma parede de corredor pode estar nitidíssima na foto da
+    cozinha — percepção 99, escopo 10.
+
+    `atributos` guarda material/cor/acabamento/rejunte separadamente, para a
+    detecção de contradição comparar chave com chave e o redator não perder
+    "dobradiça dourada" virando "dobradiça metálica" (itens 28 a 33)."""
 
     id: str
     foto_id: str
     categoria: str
     observacao: str
+    escopo: Escopo = Escopo.AMBIGUO
     confianca_percepcao: int = 0
     confianca_escopo: int = 0
-    e_reflexo: bool = False
-    e_ambiente_adjacente: bool = False
+    atributos: dict = field(default_factory=dict)
+    # Instância dentro do cômodo: "placa 1", "placa 2"... Guardada mesmo
+    # quando a quantidade NÃO vai para o texto (itens 14 e 17).
+    instancia: int = 1
     regiao: Regiao | None = None
 
-    # Preenchidos pela validação determinística (validar_escopo).
+    # Preenchidos pela validação determinística.
     status: StatusEvidencia = StatusEvidencia.ACEITA
     motivo_descarte: MotivoDescarte | None = None
     detalhe_descarte: str = ""
     confianca_final: int = 0
-    corroborada_por: list[str] = field(default_factory=list)
+    corroborada_por: list = field(default_factory=list)
+    escopo_original: Escopo | None = None      # antes da promoção de fronteira
+    categoria_proposta: str = ""               # antes da normalização canônica
+    atributos_em_conflito: list = field(default_factory=list)
 
     @property
     def aceita(self) -> bool:
         return self.status is StatusEvidencia.ACEITA
+
+    # --- compatibilidade com a leitura booleana da V1 ---------------------
+    @property
+    def e_reflexo(self) -> bool:
+        return self.escopo is Escopo.REFLEXO
+
+    @property
+    def e_ambiente_adjacente(self) -> bool:
+        return self.escopo in (Escopo.ADJACENTE, Escopo.EXTERIOR)
+
+    @property
+    def e_fronteira(self) -> bool:
+        return self.escopo is Escopo.FRONTEIRA
 
     def para_dict(self) -> dict:
         return {
             "id": self.id,
             "foto_id": self.foto_id,
             "categoria": self.categoria,
+            "categoria_proposta": self.categoria_proposta,
             "observacao": self.observacao,
+            "escopo": self.escopo.value,
+            "escopo_original": self.escopo_original.value if self.escopo_original else None,
+            "atributos": dict(self.atributos),
+            "instancia": self.instancia,
             "confianca_percepcao": self.confianca_percepcao,
             "confianca_escopo": self.confianca_escopo,
             "confianca_final": self.confianca_final,
             "e_reflexo": self.e_reflexo,
             "e_ambiente_adjacente": self.e_ambiente_adjacente,
+            "e_fronteira": self.e_fronteira,
             "regiao": self.regiao.para_dict() if self.regiao else None,
             "status": self.status.value,
             "motivo_descarte": self.motivo_descarte.value if self.motivo_descarte else None,
             "detalhe_descarte": self.detalhe_descarte,
             "corroborada_por": list(self.corroborada_por),
+            "atributos_em_conflito": list(self.atributos_em_conflito),
         }
 
 
 @dataclass
 class ConflitoEscopo:
-    """Divergência que o CÓDIGO detectou e que NÃO pode ser resolvida sozinha.
+    """Divergência que o CÓDIGO detectou e NÃO pode resolver sozinho.
 
-    Vira pendência do tipo scope_conflict (regra 19 do pedido): quem decide é
-    o vistoriador, olhando a foto."""
+    Vira pendência para o vistoriador decidir olhando a foto (itens 38 e 39)."""
 
     categoria: str
     resumo: str
-    evidencias: list[str]
-    fotos: list[str]
+    evidencias: list
+    fotos: list
+    tipo: TipoConflito = TipoConflito.ESCOPO
 
 
 @dataclass
 class ResultadoEscopo:
-    """O que a validação determinística produziu, pronto para a redação."""
-
-    aceitas: list[Evidencia]
-    descartadas: list[Evidencia]
-    conflitos: list[ConflitoEscopo]
+    aceitas: list
+    descartadas: list
+    conflitos: list
     cobertura_incompleta: bool
     fotos_utilizaveis: int
     fotos_totais: int
+    promovidas_para_fronteira: int = 0
 
     def por_categoria(self) -> dict:
         agrupado = {categoria: [] for categoria in CATEGORIAS}
@@ -237,125 +277,109 @@ class ResultadoEscopo:
         return agrupado
 
 
-# --------------------------------------------------------------------------
-# Vocabulário para detectar contradição entre fotos.
-#
-# Deliberadamente pequeno e fechado. Ele existe só para o código PERCEBER que
-# duas fotos afirmam coisas incompatíveis sobre a mesma superfície — nunca
-# para escolher quem está certo. Quem escolhe é o vistoriador.
-# --------------------------------------------------------------------------
-
-_CATEGORIAS_DE_SUPERFICIE = ("paredes", "piso", "teto")
-
-_CORES = (
-    "branco", "branca", "preto", "preta", "cinza", "bege", "marrom", "palha",
-    "amarelo", "amarela", "azul", "verde", "vermelho", "vermelha", "rosa",
-    "laranja", "roxo", "roxa", "dourado", "dourada", "prata", "amadeirado",
-    "amadeirada", "creme", "grafite", "chumbo", "terracota", "salmao", "gelo",
-    "neve", "cromio", "natural", "fume", "incolor",
-)
-
-# Cor e material que, dito de duas formas, é a mesma coisa. Sem isto o sistema
-# gritaria "contradição" entre "branco" e "branca".
-_SINONIMOS = {
-    "branca": "branco", "preta": "preto", "amarela": "amarelo",
-    "vermelha": "vermelho", "roxa": "roxo", "dourada": "dourado",
-    "amadeirada": "amadeirado", "salmao": "salmao",
-    "ceramica": "ceramico", "porcelanato": "porcelanato",
-}
-
-_MATERIAIS = (
-    "ceramico", "ceramica", "porcelanato", "laminado", "vinilico", "madeira",
-    "granito", "marmore", "gesso", "alvenaria", "pvc", "azulejo", "pastilha",
-    "textura", "pintura", "cimento", "pedra", "carpete", "tijolinho", "mdf",
-)
-
-
-def _sem_acento(texto: str) -> str:
-    texto = unicodedata.normalize("NFKD", texto.lower())
-    return texto.encode("ascii", "ignore").decode()
-
-
-def _termos(observacao: str, vocabulario: tuple) -> set:
-    """Termos do vocabulário presentes na observação, já normalizados."""
-    palavras = set(re.findall(r"[a-z]+", _sem_acento(observacao)))
-    achados = {palavra for palavra in palavras if palavra in vocabulario}
-    return {_SINONIMOS.get(termo, termo) for termo in achados}
-
-
-def _assinatura(evidencia: Evidencia) -> tuple:
-    """(cores, materiais) de uma evidência de superfície."""
-    return (_termos(evidencia.observacao, _CORES),
-            _termos(evidencia.observacao, _MATERIAIS))
-
-
-# --------------------------------------------------------------------------
+# ==========================================================================
 # Validação de escopo — o coração determinístico
-# --------------------------------------------------------------------------
+# ==========================================================================
 
-def validar_escopo(
-    evidencias: list,
-    analises: dict,
-    nome_comodo: str,
-) -> ResultadoEscopo:
+def validar_escopo(evidencias: list, analises: dict, nome_comodo: str) -> ResultadoEscopo:
     """Decide quais evidências podem virar texto do laudo deste cômodo.
 
     `analises` é {foto_id: AnaliseFoto}. Nenhuma evidência é apagada: as que
     não passam voltam em `descartadas`, com o motivo, para a auditoria.
 
-    A ordem das travas importa. Reflexo e ambiente adjacente são checados
-    ANTES dos limiares numéricos, porque são fatos categóricos: uma parede
-    refletida no espelho não vira parede deste cômodo por ter confiança 99."""
-    aceitas, descartadas, conflitos = [], [], []
+    A ordem das travas importa:
 
-    def descartar(evidencia: Evidencia, motivo: MotivoDescarte, detalhe: str = ""):
+    1. categoria canônica (o código decide, o modelo só propôs);
+    2. PROMOÇÃO DE FRONTEIRA — antes de qualquer descarte, para não perder
+       soleira, peitoril e porta-janela;
+    3. reflexo, que é fato categórico e não questão de grau;
+    4. ambiente adjacente / exterior / ambíguo;
+    5. só então os limiares numéricos."""
+    aceitas, descartadas, conflitos = [], [], []
+    promovidas = 0
+
+    def descartar(evidencia, motivo, detalhe="", conflito=None):
         evidencia.status = StatusEvidencia.DESCARTADA
         evidencia.motivo_descarte = motivo
         evidencia.detalhe_descarte = detalhe
         evidencia.confianca_final = 0
         descartadas.append(evidencia)
+        if conflito is not None:
+            conflitos.append(conflito)
 
     for evidencia in evidencias:
-        analise = analises.get(evidencia.foto_id)
-
-        if evidencia.categoria not in CATEGORIAS:
-            descartar(evidencia, MotivoDescarte.CATEGORIA_INVALIDA,
-                      f"categoria '{evidencia.categoria}' não existe no laudo")
-            continue
-
         if not evidencia.observacao.strip():
             descartar(evidencia, MotivoDescarte.OBSERVACAO_VAZIA)
             continue
 
-        # A foto inteira já foi descartada para este cômodo.
+        # 1. A categoria final é decidida por código. O modelo mandar "piso"
+        #    numa soleira não faz a soleira virar piso (itens 24 e 25).
+        evidencia.categoria_proposta = evidencia.categoria
+        evidencia.categoria = categoria_canonica(evidencia.categoria, evidencia.observacao)
+
+        analise = analises.get(evidencia.foto_id)
         if analise is None or not analise.utilizavel:
             descartar(evidencia, MotivoDescarte.FOTO_FORA_DE_ESCOPO,
                       (analise.motivo if analise else
                        "a foto não passou pela análise de escopo"))
             continue
 
-        # Fato categórico, não questão de grau: o que está no espelho já foi
-        # (ou será) descrito onde ele de fato está. Contar de novo aqui
-        # duplicaria o item — foi assim que um "armário de madeira" inexistente
-        # entrou num laudo em 22/09/2026.
-        if evidencia.e_reflexo:
+        # 2. PROMOÇÃO DE FRONTEIRA (itens 8 a 11, 61).
+        #
+        #    Porta, soleira, peitoril e esquadria ficam entre dois ambientes
+        #    por natureza. O modelo tende a lê-las como "ambiente adjacente"
+        #    justamente porque mostram o outro lado — e foi assim que a V1
+        #    perdeu a soleira do BWC e a janela inteira do Quarto Suíte.
+        #
+        #    A peça é do cômodo; o CENÁRIO visível através dela não é. Por
+        #    isso a promoção não vale quando a observação descreve a
+        #    paisagem, e nunca vale para reflexo (uma porta vista no espelho
+        #    continua sendo reflexo).
+        if (evidencia.escopo in (Escopo.ADJACENTE, Escopo.EXTERIOR, Escopo.AMBIGUO)
+                and e_elemento_de_fronteira(evidencia.observacao)
+                and not e_cenario_alem_da_abertura(evidencia.observacao)):
+            evidencia.escopo_original = evidencia.escopo
+            evidencia.escopo = Escopo.FRONTEIRA
+            promovidas += 1
+
+        # 3. Reflexo: categórico. 100% de certeza de que é um reflexo não
+        #    transforma o reflexo em móvel do cômodo.
+        if evidencia.escopo is Escopo.REFLEXO:
             descartar(evidencia, MotivoDescarte.REFLEXO,
                       "o modelo identificou a imagem como reflexo em espelho ou vidro")
             continue
 
-        # Também categórico: isto é o problema que motivou o módulo inteiro.
-        # Vira conflito, não silêncio — o vistoriador decide olhando a foto.
-        if evidencia.e_ambiente_adjacente:
-            descartar(evidencia, MotivoDescarte.AMBIENTE_ADJACENTE,
-                      f"o modelo atribuiu esta região a um ambiente vizinho, não a {nome_comodo}")
-            conflitos.append(ConflitoEscopo(
-                categoria=evidencia.categoria,
-                resumo=(f"{evidencia.observacao} — a foto mostra isso, mas a região foi "
-                        f"classificada como ambiente vizinho, e não como parte de "
-                        f"{nome_comodo}."),
-                evidencias=[evidencia.id],
-                fotos=[evidencia.foto_id],
-            ))
+        if evidencia.escopo in (Escopo.ADJACENTE, Escopo.EXTERIOR):
+            motivo = (MotivoDescarte.AMBIENTE_ADJACENTE
+                      if evidencia.escopo is Escopo.ADJACENTE else MotivoDescarte.EXTERIOR)
+            onde = ("um ambiente vizinho" if evidencia.escopo is Escopo.ADJACENTE
+                    else "a área externa")
+            descartar(
+                evidencia, motivo,
+                f"o modelo atribuiu esta região a {onde}, não a {nome_comodo}",
+                ConflitoEscopo(
+                    categoria=evidencia.categoria,
+                    resumo=(f"{evidencia.observacao} — a foto mostra isso, mas a região "
+                            f"foi classificada como {onde}, e não como parte de "
+                            f"{nome_comodo}."),
+                    evidencias=[evidencia.id], fotos=[evidencia.foto_id],
+                    tipo=TipoConflito.ESCOPO,
+                ),
+            )
+            continue
+
+        if evidencia.escopo is Escopo.AMBIGUO:
+            descartar(
+                evidencia, MotivoDescarte.AMBIGUO,
+                f"o modelo não conseguiu decidir se isto pertence a {nome_comodo}",
+                ConflitoEscopo(
+                    categoria=evidencia.categoria,
+                    resumo=(f"{evidencia.observacao} — aparece na foto, mas não deu para "
+                            f"decidir se faz parte de {nome_comodo}."),
+                    evidencias=[evidencia.id], fotos=[evidencia.foto_id],
+                    tipo=TipoConflito.ESCOPO,
+                ),
+            )
             continue
 
         if evidencia.confianca_percepcao < PISO_CONFIANCA_PERCEPCAO:
@@ -364,24 +388,30 @@ def validar_escopo(
                       f"({evidencia.confianca_percepcao}%)")
             continue
 
-        if evidencia.confianca_escopo < PISO_CONFIANCA_ESCOPO:
-            descartar(evidencia, MotivoDescarte.ESCOPO_INSUFICIENTE,
-                      f"não dá para afirmar que isto pertence a {nome_comodo} "
-                      f"({evidencia.confianca_escopo}%)")
-            conflitos.append(ConflitoEscopo(
-                categoria=evidencia.categoria,
-                resumo=(f"{evidencia.observacao} — aparece na foto, mas sem certeza "
-                        f"suficiente de que faz parte de {nome_comodo}."),
-                evidencias=[evidencia.id],
-                fotos=[evidencia.foto_id],
-            ))
+        # 5. O piso de confiança de escopo vale para o julgamento do MODELO.
+        #    Elemento promovido pelo código já teve o pertencimento decidido
+        #    estruturalmente — cobrar dele a nota do modelo seria descartar
+        #    de novo o que acabou de ser recuperado.
+        if (evidencia.escopo_original is None
+                and evidencia.confianca_escopo < PISO_CONFIANCA_ESCOPO):
+            descartar(
+                evidencia, MotivoDescarte.ESCOPO_INSUFICIENTE,
+                f"não dá para afirmar que isto pertence a {nome_comodo} "
+                f"({evidencia.confianca_escopo}%)",
+                ConflitoEscopo(
+                    categoria=evidencia.categoria,
+                    resumo=(f"{evidencia.observacao} — aparece na foto, mas sem certeza "
+                            f"suficiente de que faz parte de {nome_comodo}."),
+                    evidencias=[evidencia.id], fotos=[evidencia.foto_id],
+                    tipo=TipoConflito.ESCOPO,
+                ),
+            )
             continue
 
-        # Passou. A confiança final parte da afirmação MENOS segura — mesma
-        # filosofia que o laudo já usava para a certeza do item ("se a porta é
-        # claramente de madeira mas a roseta mal aparece, a certeza do item é
-        # a da roseta"). Ver INSTRUCAO_CERTEZA em style_guide.
         base = min(evidencia.confianca_percepcao, evidencia.confianca_escopo)
+        if evidencia.escopo_original is not None:
+            # A promoção resolveu o pertencimento; a percepção continua mandando.
+            base = evidencia.confianca_percepcao
         if analise.escopo is EscopoFoto.PARCIAL:
             base -= PENALIDADE_FOTO_PARCIAL
         evidencia.confianca_final = max(0, min(100, base))
@@ -389,131 +419,134 @@ def validar_escopo(
         aceitas.append(evidencia)
 
     _aplicar_corroboracao(aceitas)
-    conflitos.extend(_detectar_contradicoes(aceitas))
+    conflitos.extend(_detectar_contradicoes_de_atributo(aceitas))
 
     utilizaveis = sum(1 for analise in analises.values() if analise.utilizavel)
     return ResultadoEscopo(
         aceitas=aceitas,
         descartadas=descartadas,
         conflitos=conflitos,
-        # Regra 35/CASO 3: se nenhuma foto cobre o cômodo por inteiro, o
-        # sistema não pode concluir que algo NÃO EXISTE. Quem usa isso é a
-        # consolidação, para não deixar "Não se aplica." sair com certeza alta.
-        cobertura_incompleta=any(
-            analise.escopo is EscopoFoto.PARCIAL for analise in analises.values()
-        ) or utilizaveis == 0,
+        cobertura_incompleta=(
+            any(a.escopo is EscopoFoto.PARCIAL for a in analises.values())
+            or utilizaveis == 0
+        ),
         fotos_utilizaveis=utilizaveis,
         fotos_totais=len(analises),
+        promovidas_para_fronteira=promovidas,
     )
 
 
 def _aplicar_corroboracao(aceitas: list) -> None:
     """Ver a mesma coisa em FOTOS DIFERENTES melhora a PERCEPÇÃO — e só ela.
 
-    Esta assimetria é o ponto inteiro da regra 14, e vale reler devagar:
+    Esta assimetria é o ponto do item 31, e vale reler devagar:
 
-    - ver três vezes responde melhor "o que é isso?". Uma bancada que apareceu
-      desfocada numa foto e nítida em outras dua é uma bancada bem vista;
-    - ver três vezes NÃO responde "isso é deste cômodo?". Uma parede de
-      corredor fotografada de cinco ângulos continua sendo do corredor.
+    - ver três vezes responde melhor "o que é isso?";
+    - ver três vezes NÃO responde "isso é deste cômodo?". Cinco fotos de uma
+      parede de ambiente adjacente continuam sendo cinco fotos de uma parede
+      de ambiente adjacente.
 
-    Por isso o bônus entra na percepção e a confiança final continua limitada
-    pela confiança de ESCOPO. Consequência prática: quando o escopo já é o
-    fator limitante, corroborar não muda nada — que é exatamente o
-    comportamento desejado.
-
+    Por isso o bônus entra na percepção e o escopo nunca é promovido aqui.
     Só conta foto diferente: três evidências da mesma foto não são três
     confirmações, são a mesma observação picotada."""
     for categoria in CATEGORIAS:
         do_grupo = [e for e in aceitas if e.categoria == categoria]
         for evidencia in do_grupo:
-            cores, materiais = _assinatura(evidencia)
-            if not cores and not materiais:
+            if not evidencia.atributos:
                 continue
-            apoios = []
-            for outra in do_grupo:
-                if outra is evidencia or outra.foto_id == evidencia.foto_id:
-                    continue
-                outras_cores, outros_materiais = _assinatura(outra)
-                if (cores & outras_cores) or (materiais & outros_materiais):
-                    apoios.append(outra.id)
+            apoios = [
+                outra.id for outra in do_grupo
+                if outra is not evidencia
+                and outra.foto_id != evidencia.foto_id
+                and _mesma_coisa(evidencia, outra)
+            ]
             if not apoios:
                 continue
             evidencia.corroborada_por = apoios
             bonus = min(MAX_BONUS_CORROBORACAO, BONUS_CORROBORACAO * len(apoios))
             percepcao = min(100, evidencia.confianca_percepcao + bonus)
-            # Recalcula a partir da percepção melhorada, mantendo o teto de
-            # escopo e a penalidade de foto parcial que já tinham sido aplicados.
-            desconto = min(evidencia.confianca_percepcao,
-                           evidencia.confianca_escopo) - evidencia.confianca_final
+            teto = (100 if evidencia.escopo_original is not None
+                    else evidencia.confianca_escopo)
+            desconto = min(evidencia.confianca_percepcao, teto) - evidencia.confianca_final
             evidencia.confianca_final = max(
-                0, min(100, min(percepcao, evidencia.confianca_escopo) - desconto)
+                0, min(100, min(percepcao, teto) - max(0, desconto))
             )
 
 
-def _detectar_contradicoes(aceitas: list) -> list:
-    """Acha superfícies (parede/piso/teto) descritas de formas incompatíveis.
+def _mesma_coisa(a: Evidencia, b: Evidencia) -> bool:
+    """Duas evidências descrevem o mesmo tipo de coisa?
 
-    NÃO é votação (regra 13 do pedido). O código não elege a versão com mais
-    fotos e apaga o resto: a foto isolada pode ser justamente a que mostra a
-    parede certa — foi o que aconteceu com a parede vermelha em textura
-    projetada da R. Correia de Freitas, que aparecia em poucas fotos e era
-    real. Aqui o código só PERCEBE o desacordo, rebaixa as duas versões e
-    entrega a decisão ao vistoriador."""
+    Compara os atributos estruturados, não o texto solto: é o que permite
+    dizer "as duas falam da mesma parede" sem confundir a cor do revestimento
+    com a cor do rejunte."""
+    comuns = set(a.atributos) & set(b.atributos)
+    if not comuns:
+        return False
+    iguais = sum(
+        1 for chave in comuns
+        if normalizar_valor(a.atributos[chave]) == normalizar_valor(b.atributos[chave])
+    )
+    return iguais >= max(1, len(comuns) // 2)
+
+
+def _detectar_contradicoes_de_atributo(aceitas: list) -> list:
+    """Acha atributos com valores incompatíveis entre evidências da mesma
+    categoria.
+
+    Duas mudanças em relação à V1, as duas pedidas (itens 28 a 30):
+
+    1. compara ATRIBUTO com atributo. "Cerâmica branca" e "rejunte cinza" não
+       são versões concorrentes da mesma parede — são campos diferentes. A V1
+       abriu um conflito falso com exatamente isso;
+    2. o conflito fica RESTRITO ao atributo. Se duas fotos discordam só das
+       dobradiças, a porta continua valendo; a V1 rebaixava a evidência
+       inteira.
+
+    Não é votação (item 59): o código só PERCEBE o desacordo, rebaixa os dois
+    lados e entrega a decisão ao vistoriador. A foto isolada pode ser
+    justamente a certa."""
     conflitos = []
-    for categoria in _CATEGORIAS_DE_SUPERFICIE:
-        do_grupo = [e for e in aceitas if e.categoria == categoria]
-        if len(do_grupo) < 2:
-            continue
-
-        por_cor = {}
-        for evidencia in do_grupo:
-            cores, _ = _assinatura(evidencia)
-            for cor in cores:
-                por_cor.setdefault(cor, []).append(evidencia)
-
-        # Uma cor só (ou nenhuma reconhecida): nada a decidir.
-        if len(por_cor) < 2:
-            continue
-
-        # Um mesmo item pode citar duas cores legitimamente ("branca com faixa
-        # decorativa em tons de verde"). Só é contradição quando as versões
-        # vêm de evidências DIFERENTES que não compartilham nenhuma cor.
-        grupos = list(por_cor.items())
-        divergentes = [
-            (cor, evidencias) for cor, evidencias in grupos
-            if not any(e in evidencias for outra_cor, outras in grupos
-                       if outra_cor != cor for e in outras)
-        ]
-        if len(divergentes) < 2:
-            continue
-
-        envolvidas = [e for _, evidencias in divergentes for e in evidencias]
-        for evidencia in envolvidas:
-            evidencia.status = StatusEvidencia.EM_CONFLITO
-            evidencia.confianca_final = max(
-                0, evidencia.confianca_final - PENALIDADE_CONTRADICAO)
-        conflitos.append(ConflitoEscopo(
-            categoria=categoria,
-            resumo=("as fotos não concordam sobre esta superfície: "
-                    + "; ".join(f"{cor} ({len(evidencias)} evidência(s))"
-                                for cor, evidencias in divergentes)
-                    + ". Nenhuma versão foi descartada — confira qual é a do cômodo."),
-            evidencias=[e.id for e in envolvidas],
-            fotos=sorted({e.foto_id for e in envolvidas}),
-        ))
+    for categoria in CATEGORIAS:
+        do_grupo = [e for e in aceitas if e.categoria == categoria and e.atributos]
+        for i, uma in enumerate(do_grupo):
+            for outra in do_grupo[i + 1:]:
+                if uma.foto_id == outra.foto_id:
+                    continue
+                if not _mesma_coisa(uma, outra):
+                    continue
+                divergentes = atributos_conflitantes(uma.atributos, outra.atributos)
+                if not divergentes:
+                    continue
+                for evidencia in (uma, outra):
+                    evidencia.status = StatusEvidencia.EM_CONFLITO
+                    evidencia.atributos_em_conflito = sorted(
+                        set(evidencia.atributos_em_conflito) | set(divergentes)
+                    )
+                    evidencia.confianca_final = max(
+                        0, evidencia.confianca_final - PENALIDADE_CONTRADICAO)
+                detalhes = "; ".join(
+                    f"{chave}: {uma.atributos[chave]} x {outra.atributos[chave]}"
+                    for chave in divergentes
+                )
+                conflitos.append(ConflitoEscopo(
+                    categoria=categoria,
+                    resumo=(f"as fotos não concordam sobre {', '.join(divergentes)} "
+                            f"deste item ({detalhes}). Os demais atributos continuam "
+                            "valendo — confira qual versão é a do cômodo."),
+                    evidencias=[uma.id, outra.id],
+                    fotos=sorted({uma.foto_id, outra.foto_id}),
+                    tipo=TipoConflito.ATRIBUTO,
+                ))
     return conflitos
 
 
-# --------------------------------------------------------------------------
+# ==========================================================================
 # Construção a partir da resposta do modelo
-# --------------------------------------------------------------------------
+# ==========================================================================
 
-_ESCOPO_POR_TEXTO = {
-    "valid": EscopoFoto.VALIDA,
-    "valida": EscopoFoto.VALIDA,
-    "partial": EscopoFoto.PARCIAL,
-    "parcial": EscopoFoto.PARCIAL,
+_ESCOPO_FOTO_POR_TEXTO = {
+    "valid": EscopoFoto.VALIDA, "valida": EscopoFoto.VALIDA,
+    "partial": EscopoFoto.PARCIAL, "parcial": EscopoFoto.PARCIAL,
     "out_of_scope": EscopoFoto.FORA_DE_ESCOPO,
     "fora_de_escopo": EscopoFoto.FORA_DE_ESCOPO,
 }
@@ -529,10 +562,12 @@ def _inteiro(valor, padrao: int = 0) -> int:
 def analise_de_dict(dados: dict, foto_id: str, nome_comodo: str) -> AnaliseFoto:
     """Converte o JSON do modelo numa AnaliseFoto.
 
-    Escopo desconhecido cai em FORA_DE_ESCOPO, não em VALIDA: quando o sistema
-    não entendeu a resposta, a saída segura é não usar a foto (regra 16)."""
-    escopo = _ESCOPO_POR_TEXTO.get(
-        _sem_acento(str(dados.get("escopo", ""))).strip(), EscopoFoto.FORA_DE_ESCOPO
+    Escopo desconhecido cai em FORA_DE_ESCOPO: quando o sistema não entendeu a
+    resposta, a saída segura é não usar a foto (item 45)."""
+    from core.taxonomia import sem_acento
+
+    escopo = _ESCOPO_FOTO_POR_TEXTO.get(
+        sem_acento(dados.get("escopo", "")).strip(), EscopoFoto.FORA_DE_ESCOPO
     )
     return AnaliseFoto(
         foto_id=foto_id,
@@ -546,14 +581,44 @@ def analise_de_dict(dados: dict, foto_id: str, nome_comodo: str) -> AnaliseFoto:
 
 
 def evidencia_de_dict(dados: dict, evidencia_id: str, foto_id: str) -> Evidencia:
+    """Constrói a evidência a partir do JSON do modelo.
+
+    Aceita tanto o campo `escopo` da V2 quanto os booleanos `reflexo` /
+    `ambiente_adjacente` da V1 — um laudo antigo reimportado não pode quebrar
+    a leitura."""
+    escopo = dados.get("escopo")
+    if escopo:
+        escopo_final = escopo_de_texto(escopo)
+    elif dados.get("reflexo"):
+        escopo_final = Escopo.REFLEXO
+    elif dados.get("ambiente_adjacente"):
+        escopo_final = Escopo.ADJACENTE
+    else:
+        escopo_final = Escopo.INTERIOR
+
+    atributos = dados.get("atributos")
+    if not isinstance(atributos, dict):
+        atributos = {}
+    atributos = {
+        str(chave): " ".join(str(valor).split())
+        for chave, valor in atributos.items()
+        if str(valor).strip()
+    }
+
+    try:
+        instancia = max(1, int(dados.get("instancia", 1)))
+    except (TypeError, ValueError):
+        instancia = 1
+
     return Evidencia(
         id=evidencia_id,
         foto_id=foto_id,
         categoria=str(dados.get("categoria", "")).strip(),
         observacao=" ".join(str(dados.get("observacao", "")).split()),
+        escopo=escopo_final,
         confianca_percepcao=_inteiro(dados.get("confianca_percepcao")),
         confianca_escopo=_inteiro(dados.get("confianca_escopo")),
-        e_reflexo=bool(dados.get("reflexo")),
-        e_ambiente_adjacente=bool(dados.get("ambiente_adjacente")),
+        atributos=atributos,
+        instancia=instancia,
         regiao=Regiao.de_dict(dados.get("regiao")),
     )

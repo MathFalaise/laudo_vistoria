@@ -11,7 +11,6 @@ import pytest
 
 from core.evidencias import (
     AnaliseFoto,
-    ConflitoEscopo,
     EscopoFoto,
     Evidencia,
     MotivoDescarte,
@@ -21,6 +20,7 @@ from core.evidencias import (
     evidencia_de_dict,
     validar_escopo,
 )
+from core.taxonomia import Escopo
 
 COMODO = "Cozinha"
 
@@ -32,9 +32,20 @@ def foto(foto_id, escopo=EscopoFoto.VALIDA, **kwargs):
 
 def evidencia(evidencia_id, foto_id, categoria="paredes", observacao="parede branca",
               percepcao=95, escopo=95, **kwargs):
+    """Constrói uma evidência como o modelo devolveria.
+
+    Aceita os booleanos da V1 (`e_reflexo`, `e_ambiente_adjacente`) e os
+    traduz para a taxonomia da V2, para que os testes continuem afirmando
+    exatamente o que afirmavam antes."""
+    classificacao = kwargs.pop("classificacao", None)
+    if kwargs.pop("e_reflexo", False):
+        classificacao = Escopo.REFLEXO
+    if kwargs.pop("e_ambiente_adjacente", False):
+        classificacao = Escopo.ADJACENTE
     return Evidencia(id=evidencia_id, foto_id=foto_id, categoria=categoria,
                      observacao=observacao, confianca_percepcao=percepcao,
-                     confianca_escopo=escopo, **kwargs)
+                     confianca_escopo=escopo,
+                     escopo=classificacao or Escopo.INTERIOR, **kwargs)
 
 
 def validar(evidencias, analises):
@@ -166,14 +177,18 @@ def test_caso3_foto_parcial_sustenta_evidencia_com_desconto():
 # ==========================================================================
 
 def test_caso4_a_foto_isolada_nao_e_descartada_por_votacao():
-    """Três fotos dizem branco, uma diz azul. A regra 13 proíbe eleger a
-    maioria e apagar a minoria — a foto isolada pode ser justamente a que
-    mostra a parede certa."""
+    """Três fotos dizem branco, uma diz azul. Proibido eleger a maioria e
+    apagar a minoria — a foto isolada pode ser justamente a que mostra a
+    parede certa."""
     evidencias = [
-        evidencia("e1", "f1", observacao="parede em pintura branca"),
-        evidencia("e2", "f2", observacao="parede em pintura branca"),
-        evidencia("e3", "f3", observacao="parede em pintura branca"),
-        evidencia("e4", "f4", observacao="parede em textura projetada azul"),
+        evidencia("e1", "f1", observacao="parede em pintura branca",
+                  atributos={"material": "pintura", "cor": "branca"}),
+        evidencia("e2", "f2", observacao="parede em pintura branca",
+                  atributos={"material": "pintura", "cor": "branca"}),
+        evidencia("e3", "f3", observacao="parede em pintura branca",
+                  atributos={"material": "pintura", "cor": "branca"}),
+        evidencia("e4", "f4", observacao="parede em textura projetada azul",
+                  atributos={"material": "pintura", "cor": "azul"}),
     ]
     resultado = validar(evidencias, [foto(f"f{i}") for i in range(1, 5)])
 
@@ -184,8 +199,10 @@ def test_caso4_a_foto_isolada_nao_e_descartada_por_votacao():
 
 def test_caso4_contradicao_vira_conflito_e_rebaixa_os_dois_lados():
     evidencias = [
-        evidencia("e1", "f1", observacao="parede em pintura branca"),
-        evidencia("e2", "f2", observacao="parede em pintura azul"),
+        evidencia("e1", "f1", observacao="parede em pintura branca",
+                  atributos={"material": "pintura", "cor": "branca"}),
+        evidencia("e2", "f2", observacao="parede em pintura azul",
+                  atributos={"material": "pintura", "cor": "azul"}),
     ]
     resultado = validar(evidencias, [foto("f1"), foto("f2")])
 
@@ -208,15 +225,19 @@ def test_caso4_duas_cores_no_mesmo_item_nao_sao_contradicao():
 
 def test_caso4_corroboracao_melhora_a_percepcao_quando_ela_e_o_gargalo():
     """Ver a mesma coisa em duas fotos responde melhor "o que é isso?"."""
+    atributos = {"material": "porcelanato", "cor": "bege"}
     sozinha = evidencia("s1", "f9", observacao="piso em porcelanato bege",
-                        categoria="piso", percepcao=70, escopo=95)
+                        categoria="piso", percepcao=70, escopo=95,
+                        atributos=dict(atributos))
     base = validar([sozinha], [foto("f9")]).aceitas[0].confianca_final
 
     apoiadas = [
         evidencia("e1", "f1", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=70, escopo=95),
+                  categoria="piso", percepcao=70, escopo=95,
+                  atributos=dict(atributos)),
         evidencia("e2", "f2", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=70, escopo=95),
+                  categoria="piso", percepcao=70, escopo=95,
+                  atributos=dict(atributos)),
     ]
     com_apoio = validar(apoiadas, [foto("f1"), foto("f2")]).aceitas[0].confianca_final
     assert com_apoio > base
@@ -225,15 +246,19 @@ def test_caso4_corroboracao_melhora_a_percepcao_quando_ela_e_o_gargalo():
 def test_caso4_corroboracao_nao_ajuda_quando_o_gargalo_e_o_escopo():
     """A outra metade da regra 14: repetir "vi isso" não responde "é deste
     cômodo?". Com escopo abaixo da percepção, corroborar não muda nada."""
+    atributos = {"material": "porcelanato", "cor": "bege"}
     sozinha = evidencia("s1", "f9", observacao="piso em porcelanato bege",
-                        categoria="piso", percepcao=95, escopo=75)
+                        categoria="piso", percepcao=95, escopo=75,
+                        atributos=dict(atributos))
     base = validar([sozinha], [foto("f9")]).aceitas[0].confianca_final
 
     apoiadas = [
         evidencia("e1", "f1", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=95, escopo=75),
+                  categoria="piso", percepcao=95, escopo=75,
+                  atributos=dict(atributos)),
         evidencia("e2", "f2", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=95, escopo=75),
+                  categoria="piso", percepcao=95, escopo=75,
+                  atributos=dict(atributos)),
     ]
     com_apoio = validar(apoiadas, [foto("f1"), foto("f2")]).aceitas[0].confianca_final
     assert com_apoio == base == 75
@@ -244,7 +269,8 @@ def test_caso4_corroboracao_nao_ultrapassa_a_confianca_de_escopo():
     Uma parede de corredor fotografada de cinco ângulos continua do corredor."""
     evidencias = [
         evidencia(f"e{i}", f"f{i}", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=100, escopo=72)
+                  categoria="piso", percepcao=100, escopo=72,
+                  atributos={"material": "porcelanato", "cor": "bege"})
         for i in range(1, 6)
     ]
     resultado = validar(evidencias, [foto(f"f{i}") for i in range(1, 6)])
@@ -256,7 +282,8 @@ def test_caso4_corroboracao_exige_fotos_diferentes():
     """Três evidências da MESMA foto não são três confirmações."""
     evidencias = [
         evidencia(f"e{i}", "f1", observacao="piso em porcelanato bege",
-                  categoria="piso", percepcao=80, escopo=80)
+                  categoria="piso", percepcao=80, escopo=80,
+                  atributos={"material": "porcelanato", "cor": "bege"})
         for i in range(1, 4)
     ]
     resultado = validar(evidencias, [foto("f1")])
@@ -383,11 +410,14 @@ def test_evidencia_de_dict_normaliza_e_limita():
     assert item.e_reflexo is True
 
 
-def test_categoria_inexistente_e_descartada():
-    evidencias = [evidencia("e1", "f1", categoria="quintal")]
+def test_categoria_inventada_pelo_modelo_e_normalizada():
+    """V2: o modelo propõe, o código decide. Categoria fora das oito não
+    derruba a evidência — ela é normalizada pelo vocabulário."""
+    evidencias = [evidencia("e1", "f1", categoria="quintal",
+                            observacao="parede em pintura branca")]
     resultado = validar(evidencias, [foto("f1")])
-    assert evidencias[0].motivo_descarte is MotivoDescarte.CATEGORIA_INVALIDA
-    assert resultado.aceitas == []
+    assert resultado.aceitas[0].categoria == "paredes"
+    assert resultado.aceitas[0].categoria_proposta == "quintal"
 
 
 def test_observacao_vazia_e_descartada():
@@ -413,10 +443,16 @@ def test_por_categoria_agrupa_as_oito():
 
 
 def test_evidencia_serializa_para_o_banco():
-    evidencias = [evidencia("e1", "f1", regiao=Regiao(0.1, 0.2, 0.3, 0.4))]
+    evidencias = [evidencia("e1", "f1", regiao=Regiao(0.1, 0.2, 0.3, 0.4),
+                            atributos={"material": "pintura", "cor": "branca"})]
     validar(evidencias, [foto("f1")])
     dados = evidencias[0].para_dict()
     assert dados["id"] == "e1"
     assert dados["regiao"] == {"x": 0.1, "y": 0.2, "largura": 0.3, "altura": 0.4}
     assert dados["status"] == "aceita"
     assert dados["confianca_final"] > 0
+    # campos novos da V2
+    assert dados["escopo"] == "room_interior"
+    assert dados["atributos"] == {"material": "pintura", "cor": "branca"}
+    assert dados["instancia"] == 1
+    assert dados["e_fronteira"] is False
