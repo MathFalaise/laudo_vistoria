@@ -24,8 +24,8 @@ from core.report_writer import (
     normalizar_linha,
     texto_vazio_da_categoria,
 )
-from core.evidencias import (AnaliseFoto, EscopoFoto, analise_de_dict,
-                             evidencia_de_dict)
+from core.evidencias import (AnaliseFoto, EscopoFoto, agrupar_objetos,
+                             analise_de_dict, evidencia_de_dict)
 from core.style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
                          montar_prompt_consolidacao_evidencias,
                          montar_prompt_consolidacao_v2,
@@ -1134,9 +1134,17 @@ def consolidar_evidencias_v2(
     redação o texto passa pelas mesmas travas de sempre: consolidação de
     itens repetidos, segunda olhada nos itens de certeza baixa e
     _montar_categoria, que limpa testes indevidos e separa as pendências."""
-    por_categoria = resultado_escopo.por_categoria()
+    # As evidências do MESMO objeto, vistas em fotos diferentes, viram UM
+    # objeto antes de chegar ao redator. Sem isto, o inventário exaustivo
+    # inflava a contagem: o mesmo chuveiro em duas fotos virou "dois
+    # chuveiros" no benchmark real.
+    grupos = agrupar_objetos(resultado_escopo.aceitas)
+    por_categoria = {categoria: [] for categoria in CATEGORIAS}
+    for grupo in grupos:
+        por_categoria[grupo["categoria"]].append(grupo)
+
     tipos = tipos_eletricos_presentes(
-        [e.observacao for e in por_categoria.get("eletrico", [])]
+        [g["observacao"] for g in por_categoria.get("eletrico", [])]
     )
     prompt = montar_prompt_consolidacao_v2(
         nome_comodo, CATEGORIAS, por_categoria,

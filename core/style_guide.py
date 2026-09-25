@@ -1049,32 +1049,33 @@ def montar_prompt_consolidacao_v2(
 
     linhas = []
     for categoria in categorias:
-        evidencias = evidencias_por_categoria.get(categoria, [])
+        grupos = evidencias_por_categoria.get(categoria, [])
         rotulo = ROTULOS_CATEGORIA[categoria]
-        if not evidencias:
-            linhas.append(f"{rotulo}: (nenhuma evidência aprovada)")
+        if not grupos:
+            linhas.append(f"{rotulo}: (nenhum objeto identificado)")
             continue
         itens = []
-        for evidencia in evidencias:
+        for numero, grupo in enumerate(grupos, start=1):
             atributos = ", ".join(
-                f"{chave}={valor}" for chave, valor in sorted(evidencia.atributos.items())
+                f"{chave}={valor}" for chave, valor in sorted(grupo["atributos"].items())
             )
             marcas = []
-            if evidencia.e_fronteira:
+            if grupo["e_fronteira"]:
                 marcas.append("estrutura de divisa do cômodo")
-            if evidencia.corroborada_por:
-                marcas.append(f"visto em +{len(evidencia.corroborada_por)} foto(s)")
-            if evidencia.atributos_em_conflito:
-                marcas.append("as fotos divergem em: "
-                              + ", ".join(evidencia.atributos_em_conflito))
+            if len(grupo["fotos"]) > 1:
+                marcas.append(f"o MESMO objeto aparece em {len(grupo['fotos'])} fotos")
+            if grupo["instancias_na_mesma_foto"] > 1:
+                marcas.append(
+                    f"a mesma foto mostra {grupo['instancias_na_mesma_foto']} "
+                    "unidades deste objeto")
+            if grupo["conflitos"]:
+                marcas.append("as fotos divergem em: " + ", ".join(grupo["conflitos"]))
             itens.append(
-                f"  - [{evidencia.id}] foto {evidencia.foto_id}"
-                f" (inst. {evidencia.instancia}, confiança {evidencia.confianca_final})"
-                f": {evidencia.observacao}"
+                f"  OBJETO {numero} (confiança {grupo['confianca']}): {grupo['observacao']}"
                 + (f"\n      atributos: {atributos}" if atributos else "")
                 + (f"\n      obs.: {'; '.join(marcas)}" if marcas else "")
             )
-        linhas.append(f"{rotulo} ({len(evidencias)} evidência(s)):\n" + "\n".join(itens))
+        linhas.append(f"{rotulo} — {len(grupos)} objeto(s):\n" + "\n".join(itens))
     bloco_evidencias = "\n".join(linhas)
 
     bloco_notas = ""
@@ -1132,10 +1133,14 @@ def montar_prompt_consolidacao_v2(
         f"{_regras()}\n\n"
         f"Cômodo: {nome_comodo}\n\n"
         f"{bloco_notas}"
-        "Abaixo estão as EVIDÊNCIAS já validadas deste cômodo. Elas passaram "
-        "por uma etapa que separou o que pertence a este cômodo do que "
-        "pertence a ambiente vizinho ou é reflexo — o que foi descartado NÃO "
-        "está nesta lista e não deve aparecer no laudo.\n\n"
+        "Abaixo estão os OBJETOS identificados neste cômodo. Eles passaram por "
+        "uma etapa que separou o que pertence a este cômodo do que pertence a "
+        "ambiente vizinho ou é reflexo — o que foi descartado NÃO está nesta "
+        "lista e não deve aparecer no laudo.\n\n"
+        "Cada OBJETO da lista é UMA COISA, já reunida a partir de todas as "
+        "fotos em que ela aparece. Aparecer em cinco fotos não faz dele cinco "
+        "coisas: a quantidade é o número de OBJETOS listados, nunca o número "
+        "de fotos.\n\n"
         f"{bloco_evidencias}\n\n"
         f"{aviso_cobertura}{bloco_rodape}{bloco_eletrico}"
         "REGRAS DESTA ETAPA — muito importante:\n"
@@ -1152,12 +1157,13 @@ def montar_prompt_consolidacao_v2(
         "em alguma linha. Peça pequena (porta-papel, gancho, saboneteira, "
         "porta-toalha) é item de laudo como qualquer outro — não agrupe em "
         "\"acessórios\" nem omita por ser pequena.\n"
-        "- Várias evidências podem descrever o MESMO objeto visto em fotos "
-        "diferentes — junte-as numa linha só. Evidências com instâncias "
-        "diferentes são objetos diferentes.\n"
-        "- Quando a quantidade for relevante e estiver clara (portas, "
-        "janelas, armários, gavetas, peças de mobília), preserve-a. Se estiver "
-        "incerta, descreva sem número em vez de chutar.\n"
+        "- CONTAGEM: use o número de OBJETOS listados. Se a lista traz um "
+        "chuveiro, escreva um chuveiro — mesmo que ele apareça em várias "
+        "fotos. Se traz dois armários, escreva dois. Quando a lista não "
+        "deixar a quantidade clara, descreva sem número em vez de chutar: "
+        "número errado num laudo é pior que ausência de número.\n"
+        "- Objetos parecidos mas diferentes (uma bancada com cuba e uma "
+        "bancada de apoio) continuam em linhas separadas.\n"
         "- Evidência com confiança baixa vira item com certeza baixa.\n"
         "- Se as evidências divergem num atributo, escolha a melhor "
         "sustentada e dê certeza baixa ao item; os demais atributos "

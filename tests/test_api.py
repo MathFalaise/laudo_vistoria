@@ -91,13 +91,16 @@ class _Models:
 
     def generate_content(self, model, contents, config):
         prompt = next(p for p in reversed(contents) if isinstance(p, str))
-        if "Esta etapa NÃO escreve laudo" in prompt:
+        if "Segunda passagem nas MESMAS fotos" in prompt:
+            chave = "dirigida"
+        elif "Esta etapa NÃO escreve laudo" in prompt:
             chave = "escopo"
-        elif "Abaixo estão as EVIDÊNCIAS já validadas" in prompt:
+        elif "Abaixo estão os OBJETOS identificados" in prompt:
             chave = "consolidacao"
         else:
             chave = "outra"
-        return _Resposta(json.dumps(self.roteiro[chave], ensure_ascii=False))
+        return _Resposta(json.dumps(self.roteiro.get(chave, {"evidencias": []}),
+                                    ensure_ascii=False))
 
 
 class _Cliente:
@@ -129,19 +132,24 @@ def roteiro_padrao(quantidade_fotos=2):
             "evidencias": [
                 {"foto_indice": 1, "categoria": "paredes",
                  "observacao": "paredes em pintura branca",
-                 "ambiente_adjacente": False, "reflexo": False,
-                 "confianca_percepcao": 95, "confianca_escopo": 95},
+                 "escopo": "room_interior",
+                 "confianca_percepcao": 95, "confianca_escopo": 95,
+                 "atributos": {"material": "pintura", "cor": "branca"}},
                 {"foto_indice": 1, "categoria": "piso",
                  "observacao": "piso em cerâmica cinza",
-                 "ambiente_adjacente": False, "reflexo": False,
-                 "confianca_percepcao": 70, "confianca_escopo": 90},
+                 "escopo": "room_interior",
+                 "confianca_percepcao": 70, "confianca_escopo": 90,
+                 "atributos": {"material": "cerâmica", "cor": "cinza"}},
                 # esta é de outro ambiente e não pode virar texto
                 {"foto_indice": 2, "categoria": "paredes",
                  "observacao": "parede em pintura verde do corredor",
-                 "ambiente_adjacente": True, "reflexo": False,
-                 "confianca_percepcao": 99, "confianca_escopo": 15},
+                 "escopo": "adjacent_room",
+                 "confianca_percepcao": 99, "confianca_escopo": 15,
+                 "atributos": {"material": "pintura", "cor": "verde"}},
             ],
         },
+        # a busca dirigida não acha nada: o cômodo de teste é mínimo
+        "dirigida": {"evidencias": []},
         "consolidacao": laudo_padrao(),
     }
 

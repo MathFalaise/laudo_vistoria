@@ -489,6 +489,135 @@ def _mesma_coisa(a: Evidencia, b: Evidencia) -> bool:
     return iguais >= max(1, len(comuns) // 2)
 
 
+def agrupar_objetos(evidencias: list) -> list:
+    """Junta as evidências que descrevem o MESMO objeto visto em fotos
+    diferentes.
+
+    Existe por causa de um erro medido no benchmark real: o inventário
+    exaustivo gera uma evidência por foto, e o redator lia cada uma como um
+    objeto — o mesmo chuveiro em duas fotos virou "dois chuveiros", e um
+    ar-condicionado em três fotos virou "três aparelhos".
+
+    A contagem interna continua disponível (quantas evidências, quantas
+    fotos); o que muda é que o redator passa a ver UM objeto com N evidências,
+    em vez de N objetos.
+
+    Objetos distintos na MESMA foto (instância 1, 2, 3...) continuam
+    distintos: ali foi o modelo que afirmou serem vários."""
+    grupos = []
+    for evidencia in evidencias:
+        alvo = None
+        for grupo in grupos:
+            referencia = grupo["evidencias"][0]
+            if referencia.categoria != evidencia.categoria:
+                continue
+            # mesma foto + instância diferente = objetos diferentes
+            if (referencia.foto_id == evidencia.foto_id
+                    and referencia.instancia != evidencia.instancia):
+                continue
+            if _mesmo_objeto(referencia, evidencia):
+                alvo = grupo
+                break
+        if alvo is None:
+            grupos.append({"evidencias": [evidencia]})
+        else:
+            alvo["evidencias"].append(evidencia)
+
+    for grupo in grupos:
+        itens = grupo["evidencias"]
+        grupo["categoria"] = itens[0].categoria
+        grupo["fotos"] = sorted({e.foto_id for e in itens})
+        grupo["confianca"] = max(e.confianca_final for e in itens)
+        grupo["e_fronteira"] = any(e.e_fronteira for e in itens)
+        # O texto mais longo costuma ser o mais detalhado, e é o detalhe que
+        # a V1 perdia ("dobradiça dourada" virando "dobradiça metálica").
+        grupo["observacao"] = max((e.observacao for e in itens), key=len)
+        atributos = {}
+        for evidencia in itens:
+            for chave, valor in evidencia.atributos.items():
+                atributos.setdefault(chave, valor)
+        grupo["atributos"] = atributos
+        grupo["conflitos"] = sorted({
+            chave for e in itens for chave in e.atributos_em_conflito
+        })
+        grupo["instancias_na_mesma_foto"] = max(
+            (len({e.instancia for e in itens if e.foto_id == foto})
+             for foto in grupo["fotos"]), default=1,
+        )
+    return grupos
+
+
+_PALAVRAS_VAZIAS = {
+    "um", "uma", "uns", "umas", "o", "a", "os", "as", "de", "da", "do", "das",
+    "dos", "em", "na", "no", "nas", "nos", "com", "e", "cor", "bom", "estado",
+    "regular", "tipo", "para", "detalhe", "vista", "foto", "parte", "sobre",
+    "fixado", "fixada", "instalado", "instalada", "aparente", "possui",
+}
+
+# Material, cor e acabamento DESCREVEM, não identificam. "Porta-papel
+# higiênico em metal cromado" e "Chuveiro em metal cromado" compartilham
+# "metal" e "cromado" — e com eles no núcleo os dois foram considerados o
+# mesmo objeto, sumindo um item do laudo. Isso é pior que contar duas vezes.
+_PALAVRAS_DESCRITIVAS = {
+    "metal", "metalico", "metalica", "cromado", "cromada", "inox", "aco",
+    "madeira", "mdf", "vidro", "ceramica", "ceramico", "porcelanato",
+    "granito", "marmore", "aluminio", "plastico", "polimero", "louca",
+    "acrilico", "gesso", "pvc", "branco", "branca", "preto", "preta",
+    "cinza", "bege", "marrom", "verde", "azul", "amarelo", "vermelho",
+    "dourado", "dourada", "prata", "prateado", "amadeirado", "claro",
+    "clara", "escuro", "escura", "fosco", "brilhante", "liso", "lisa",
+    "parede", "piso", "teto",
+}
+
+
+def _palavras_ordenadas(texto: str) -> list:
+    import re
+    import unicodedata
+
+    limpo = unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode()
+    limpo = limpo.replace("-", "")
+    return [p for p in re.findall(r"[a-z]{4,}", limpo) if p not in _PALAVRAS_VAZIAS]
+
+
+def _nucleo(texto: str) -> set:
+    """Palavras que IDENTIFICAM o objeto, sem as que só o descrevem."""
+    return {p for p in _palavras_ordenadas(texto) if p not in _PALAVRAS_DESCRITIVAS}
+
+
+def _substantivo_nucleo(texto: str):
+    """A primeira palavra identificadora — na prática, o nome da coisa."""
+    for palavra in _palavras_ordenadas(texto):
+        if palavra not in _PALAVRAS_DESCRITIVAS:
+            return palavra
+    return None
+
+
+def _mesmo_objeto(a: Evidencia, b: Evidencia) -> bool:
+    """Duas evidências falam do mesmo objeto?
+
+    Exige DUAS coisas, e a ordem importa:
+
+    1. o substantivo-núcleo bate — "porta-papel" e "chuveiro" são coisas
+       diferentes por mais material que compartilhem;
+    2. metade das palavras identificadoras coincide.
+
+    O critério é exigente de propósito. Juntar objetos diferentes some com
+    item do laudo; separar o mesmo objeto em dois apenas infla uma contagem,
+    que a redação ainda pode corrigir. Dos dois erros, o primeiro é o caro."""
+    nucleo_a, nucleo_b = _nucleo(a.observacao), _nucleo(b.observacao)
+    if not nucleo_a or not nucleo_b:
+        return False
+
+    cabeca_a, cabeca_b = _substantivo_nucleo(a.observacao), _substantivo_nucleo(b.observacao)
+    if cabeca_a is None or cabeca_b is None:
+        return False
+    if cabeca_a != cabeca_b and cabeca_a not in nucleo_b and cabeca_b not in nucleo_a:
+        return False
+
+    comuns = nucleo_a & nucleo_b
+    return len(comuns) / min(len(nucleo_a), len(nucleo_b)) >= 0.5
+
+
 def _detectar_contradicoes_de_atributo(aceitas: list) -> list:
     """Acha atributos com valores incompatíveis entre evidências da mesma
     categoria.
@@ -505,7 +634,13 @@ def _detectar_contradicoes_de_atributo(aceitas: list) -> list:
     Não é votação (item 59): o código só PERCEBE o desacordo, rebaixa os dois
     lados e entrega a decisão ao vistoriador. A foto isolada pode ser
     justamente a certa."""
-    conflitos = []
+    # UM conflito por (categoria, atributo), não por par de evidências.
+    #
+    # No benchmark real a versão par a par gerou 213 pendências num banheiro e
+    # 359 num quarto: com 40 evidências de parede são 780 pares, e cada
+    # diferença de redação virava uma pendência. Ninguém lê 359 pendências, e
+    # uma lista que ninguém lê protege menos que lista nenhuma.
+    acumulado: dict = {}
     for categoria in CATEGORIAS:
         do_grupo = [e for e in aceitas if e.categoria == categoria and e.atributos]
         for i, uma in enumerate(do_grupo):
@@ -514,29 +649,38 @@ def _detectar_contradicoes_de_atributo(aceitas: list) -> list:
                     continue
                 if not _mesma_coisa(uma, outra):
                     continue
-                divergentes = atributos_conflitantes(uma.atributos, outra.atributos)
-                if not divergentes:
-                    continue
-                for evidencia in (uma, outra):
-                    evidencia.status = StatusEvidencia.EM_CONFLITO
-                    evidencia.atributos_em_conflito = sorted(
-                        set(evidencia.atributos_em_conflito) | set(divergentes)
+                for chave in atributos_conflitantes(uma.atributos, outra.atributos):
+                    registro = acumulado.setdefault(
+                        (categoria, chave),
+                        {"valores": {}, "evidencias": set(), "fotos": set()},
                     )
-                    evidencia.confianca_final = max(
-                        0, evidencia.confianca_final - PENALIDADE_CONTRADICAO)
-                detalhes = "; ".join(
-                    f"{chave}: {uma.atributos[chave]} x {outra.atributos[chave]}"
-                    for chave in divergentes
-                )
-                conflitos.append(ConflitoEscopo(
-                    categoria=categoria,
-                    resumo=(f"as fotos não concordam sobre {', '.join(divergentes)} "
-                            f"deste item ({detalhes}). Os demais atributos continuam "
-                            "valendo — confira qual versão é a do cômodo."),
-                    evidencias=[uma.id, outra.id],
-                    fotos=sorted({uma.foto_id, outra.foto_id}),
-                    tipo=TipoConflito.ATRIBUTO,
-                ))
+                    for evidencia in (uma, outra):
+                        registro["valores"].setdefault(
+                            normalizar_valor(evidencia.atributos[chave]),
+                            evidencia.atributos[chave],
+                        )
+                        registro["evidencias"].add(evidencia.id)
+                        registro["fotos"].add(evidencia.foto_id)
+                        evidencia.status = StatusEvidencia.EM_CONFLITO
+                        evidencia.atributos_em_conflito = sorted(
+                            set(evidencia.atributos_em_conflito) | {chave})
+
+    conflitos = []
+    for (categoria, chave), registro in sorted(acumulado.items()):
+        for evidencia in aceitas:
+            if evidencia.id in registro["evidencias"]:
+                evidencia.confianca_final = max(
+                    0, evidencia.confianca_final - PENALIDADE_CONTRADICAO)
+        versoes = " x ".join(sorted(registro["valores"].values()))
+        conflitos.append(ConflitoEscopo(
+            categoria=categoria,
+            resumo=(f"as fotos não concordam sobre {chave} nesta categoria "
+                    f"({versoes}), em {len(registro['fotos'])} foto(s). Os demais "
+                    "atributos continuam valendo — confira qual versão é a do cômodo."),
+            evidencias=sorted(registro["evidencias"]),
+            fotos=sorted(registro["fotos"]),
+            tipo=TipoConflito.ATRIBUTO,
+        ))
     return conflitos
 
 

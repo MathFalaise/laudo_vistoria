@@ -40,7 +40,7 @@ class _Models:
             etapa = "evidencias"
         elif "Segunda passagem nas MESMAS fotos" in prompt:
             etapa = "dirigida"
-        elif "Abaixo estão as EVIDÊNCIAS já validadas" in prompt:
+        elif "Abaixo estão os OBJETOS identificados" in prompt:
             etapa = "consolidacao"
         else:
             etapa = "outra"

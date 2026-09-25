@@ -297,3 +297,109 @@ def test_varanda_nao_exige_porta_nem_bacia():
     chaves = {item.chave for item in itens_esperados("Varanda")}
     assert "bacia" not in chaves
     assert "piso" in chaves and "parede" in chaves
+
+
+# ==========================================================================
+# AGRUPAMENTO DE OBJETOS e CONFLITO AGREGADO
+#
+# As duas regressões que o benchmark real da V2 expôs, em 25/09/2026:
+# contagem inflada ("dois chuveiros" para o mesmo chuveiro em duas fotos) e
+# 359 pendências de atributo num cômodo só.
+# ==========================================================================
+
+def test_o_mesmo_objeto_em_varias_fotos_e_um_objeto_so():
+    """Benchmark: o mesmo chuveiro em duas fotos virou "dois chuveiros"."""
+    from core.evidencias import agrupar_objetos
+
+    evidencias = [
+        ev("e1", "f1", "Chuveiro em metal cromado fixado na parede"),
+        ev("e2", "f2", "Detalhe do chuveiro metálico fixado na parede"),
+        ev("e3", "f3", "Chuveiro cromado visto de frente"),
+    ]
+    for evidencia in evidencias:
+        evidencia.confianca_final = 95
+
+    grupos = agrupar_objetos(evidencias)
+    assert len(grupos) == 1
+    assert len(grupos[0]["fotos"]) == 3
+
+
+def test_objetos_diferentes_nao_sao_juntados_pelo_material():
+    """"metal cromado" é boilerplate de laudo, não identidade. Juntar
+    porta-papel com chuveiro sumiria com um item."""
+    from core.evidencias import agrupar_objetos
+
+    evidencias = [
+        ev("e1", "f1", "Porta-papel higiênico em metal cromado"),
+        ev("e2", "f2", "Chuveiro em metal cromado"),
+        ev("e3", "f3", "Saboneteira de parede em metal cromado"),
+        ev("e4", "f1", "Ganchos cabideiros em metal cromado"),
+    ]
+    for evidencia in evidencias:
+        evidencia.confianca_final = 95
+
+    assert len(agrupar_objetos(evidencias)) == 4
+
+
+def test_instancias_diferentes_na_mesma_foto_continuam_separadas():
+    """Ali foi o modelo que afirmou serem várias."""
+    from core.evidencias import agrupar_objetos
+
+    evidencias = [
+        ev("e1", "f1", "Placa com tomada", categoria="eletrico"),
+        ev("e2", "f1", "Placa com tomada", categoria="eletrico"),
+    ]
+    evidencias[0].instancia, evidencias[1].instancia = 1, 2
+    for evidencia in evidencias:
+        evidencia.confianca_final = 95
+
+    assert len(agrupar_objetos(evidencias)) == 2
+
+
+def test_o_grupo_preserva_o_texto_mais_detalhado():
+    """Item 33: "dobradiça dourada" não pode virar "dobradiça metálica"."""
+    from core.evidencias import agrupar_objetos
+
+    evidencias = [
+        ev("e1", "f1", "Porta em madeira", categoria="porta"),
+        ev("e2", "f2",
+           "Porta em madeira escura almofadada com dobradiças douradas e soleira",
+           categoria="porta"),
+    ]
+    for evidencia in evidencias:
+        evidencia.confianca_final = 90
+
+    grupo = agrupar_objetos(evidencias)[0]
+    assert "douradas" in grupo["observacao"]
+
+
+def test_conflito_de_atributo_e_um_por_categoria_e_atributo():
+    """Benchmark: a versão par a par gerou 359 pendências num quarto. Com 40
+    evidências de parede são 780 pares — ninguém lê isso, e lista que ninguém
+    lê protege menos que lista nenhuma."""
+    evidencias = []
+    for i in range(1, 11):
+        evidencias.append(ev(
+            f"e{i}", f"f{i}", "Parede em pintura lisa", categoria="paredes",
+            atributos={"material": "pintura",
+                       "cor": "branca" if i % 2 else "cinza"},
+        ))
+    resultado = validar(evidencias, [foto(f"f{i}") for i in range(1, 11)])
+
+    de_atributo = [c for c in resultado.conflitos if c.tipo is TipoConflito.ATRIBUTO]
+    assert len(de_atributo) == 1, "um conflito por (categoria, atributo)"
+    assert "cor" in de_atributo[0].resumo
+    assert "branca" in de_atributo[0].resumo and "cinza" in de_atributo[0].resumo
+
+
+def test_valor_vago_nao_contradiz():
+    """"cor: colorido" não é uma cor concorrente de "cor: branco" — é uma
+    não-resposta. Foi o que gerou 213 conflitos falsos num banheiro."""
+    evidencias = [
+        ev("e1", "f1", "Parede em cerâmica", categoria="paredes",
+           atributos={"material": "cerâmica", "cor": "branco"}),
+        ev("e2", "f2", "Parede em cerâmica", categoria="paredes",
+           atributos={"material": "cerâmica", "cor": "colorido"}),
+    ]
+    resultado = validar(evidencias, [foto("f1"), foto("f2")])
+    assert [c for c in resultado.conflitos if c.tipo is TipoConflito.ATRIBUTO] == []

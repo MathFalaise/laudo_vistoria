@@ -365,6 +365,22 @@ def normalizar_valor(valor: str) -> str:
     return _SINONIMOS_DE_VALOR.get(limpo, limpo)
 
 
+# Valores que não afirmam nada e por isso não podem CONTRADIZER nada.
+# "cor: colorido" não é uma cor concorrente de "cor: branco" — é uma
+# não-resposta. Sem esta lista, o benchmark real gerou 213 conflitos falsos
+# num banheiro só.
+_VALORES_VAGOS = {
+    "colorido", "variado", "variados", "diverso", "diversos", "misto",
+    "indefinido", "indeterminado", "nao identificado", "na", "n/a", "varias",
+    "varios", "multiplo", "multiplos", "outro", "outros", "desconhecido",
+}
+
+
+def valor_informativo(valor: str) -> bool:
+    limpo = normalizar_valor(valor)
+    return bool(limpo) and limpo not in _VALORES_VAGOS
+
+
 def atributos_conflitantes(a: dict, b: dict) -> list:
     """Nomes de atributo em que as duas evidências se contradizem.
 
@@ -376,7 +392,8 @@ def atributos_conflitantes(a: dict, b: dict) -> list:
         if chave not in ATRIBUTOS_CONHECIDOS:
             continue
         valor_a, valor_b = normalizar_valor(a[chave]), normalizar_valor(b[chave])
-        if not valor_a or not valor_b:
+        # Valor vago não contradiz: ele só não informa.
+        if not valor_informativo(valor_a) or not valor_informativo(valor_b):
             continue
         if valor_a == valor_b:
             continue
