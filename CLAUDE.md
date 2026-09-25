@@ -20,13 +20,15 @@ Ver `docs/instalacao.md`, `docs/producao.md` e `docs/backup.md`.
 **Linha de comando** — continua funcionando, sem alteração:
 
 ```bash
-python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
+python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências (clássico)
 python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
-python main.py "C:\caminho" --evidencias       # com validação de escopo por foto
+python main.py "C:\caminho" --evidencias       # motor V2 (escopo, fronteira, cobertura)
+python main.py "C:\caminho" --evidencias-v1    # motor V1, mantido para comparação
 python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
 python conferir.py "C:\caminho\para\o\imovel"  # confere as fotos contra o laudo
 python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
-python -m pytest                              # 178 testes, nenhum chama a API
+python benchmark.py "C:\caminho" --motores classico evidencias_v2   # A/B
+python -m pytest                              # 277 testes, nenhum chama a API
 ```
 
 O `main.py` já roda a conferência no fim (desligue com `--sem-conferencia`);
@@ -277,6 +279,67 @@ alteração, e é o que garante que não existam duas versões da mesma regra.
   texto puro. Fica desligado por padrão no CLI (`--evidencias` liga) até o
   vistoriador rodar os dois motores no mesmo imóvel e comparar; na web é o
   padrão da tela.
+
+- **Motor de evidências V2 (desde 25/09/2026):** a V1 foi a benchmark com
+  107 fotos reais (BWC Suíte + Quarto Suíte) e o resultado decidiu o resto.
+  Ela acertou mais FATOS que o clássico — achou um ar-condicionado split
+  inteiro que ele perdeu, corrigiu a bacia sanitária (o clássico escreveu
+  "com caixa acoplada" numa bacia de válvula de parede), pegou a porta
+  almofadada, as dobradiças douradas e a banheira de hidromassagem, e
+  descartou o reflexo que teria criado um terceiro criado-mudo. E entregou um
+  laudo pior em três pontos, que a V2 corrige POR CÓDIGO:
+
+  1. **Elemento de fronteira.** Soleira, peitoril, batente, vistas, esquadria
+     e porta-janela ficam entre dois ambientes por natureza, e o modelo as
+     lia como "ambiente adjacente" justamente porque mostram o outro lado. O
+     laudo perdeu a soleira do BWC e a categoria Janela inteira do Quarto.
+     Agora existe `Escopo.FRONTEIRA` e o código PROMOVE o que o modelo
+     rebaixou (`core/taxonomia.e_elemento_de_fronteira`). A peça é do cômodo;
+     o cenário visto através dela não é — e quem decide qual dos dois a frase
+     descreve é quem vem primeiro no texto.
+  2. **Categoria.** O modelo propõe, o código decide
+     (`core/taxonomia.categoria_canonica`): soleira → Porta mesmo dividindo
+     dois pisos, peitoril → Janela, box → Mobília mesmo tendo folhas de
+     correr, porta-papel/ganchos/toalheiro → Mobília. A V1 mandou o box para
+     Porta e a soleira para Piso porque acreditou no modelo.
+  3. **Cobertura.** Porta-papel, ganchos e toalheiro sumiram na consolidação
+     sem que nada reclamasse. `core/cobertura.py` pergunta, por tipo de
+     cômodo, se há evidência para cada tipo esperado; o que faltar vira busca
+     DIRIGIDA nas mesmas fotos (máx. 3 por cômodo) e, se ainda faltar,
+     pendência. A saída é sempre dúvida, nunca "o item não existe".
+
+  Mais dois acertos determinísticos: contradição passou a ser por ATRIBUTO
+  (cerâmica branca + rejunte cinza são campos diferentes da mesma parede,
+  não versões concorrentes), e o rodapé ganhou três estados — no BWC o
+  azulejo desce até o piso e NÃO há rodapé, mas os dois motores escreviam
+  "com rodapé em cerâmica branca".
+
+  Componentes elétricos têm regra própria: o que importa é nomear os TIPOS e
+  a composição, não contar unidades. Contagem de placa quase sempre sai
+  errada e deixa a frase pior; a contagem interna continua guardada.
+
+- **A V2 reprovou no primeiro teste real, e isso está registrado de
+  propósito.** A primeira versão gerou 220 pendências no BWC e 365 no Quarto.
+  Duas causas: a detecção de contradição comparava par a par e emitia um
+  conflito POR PAR (40 evidências de parede = 780 pares), e o inventário
+  exaustivo gera uma evidência por FOTO, que o redator lia como um objeto —
+  o mesmo chuveiro em duas fotos virou "dois chuveiros", um split em três
+  fotos virou "três aparelhos". Depois de agregar conflito por
+  (categoria, atributo) e agrupar evidências do mesmo objeto
+  (`core/evidencias.agrupar_objetos`), caiu para 26 e 22.
+
+  O agrupamento exige que o SUBSTANTIVO-NÚCLEO bata: material e cor são
+  boilerplate de laudo, e com eles no critério "porta-papel em metal
+  cromado" e "chuveiro em metal cromado" viravam o mesmo objeto — o que
+  sumiria com um item, erro pior que contar duas vezes.
+
+- **Os três motores convivem, e isso não é indecisão.** `--classico` é o que
+  gerou todas as vistorias reais; `--evidencias-v1` fica para comparação;
+  `--evidencias` é a V2, padrão na web. A V2 custa cerca de 3x o clássico
+  (medido: ~US$ 0,10 contra ~US$ 0,035 nas 107 fotos), detalha menos mobília
+  planejada e ainda gera pendência demais. Ela NÃO substitui o clássico
+  enquanto o `benchmark.py` não provar isso em mais imóveis — de preferência
+  com cozinha e área de serviço, onde ela está mais fraca.
 
 - **Rastreabilidade (desde 25/09/2026):** no banco, `Foto -> Evidencia ->
   ItemLaudo -> Pendencia`. A pendência aponta para o item por ID, não pelo
