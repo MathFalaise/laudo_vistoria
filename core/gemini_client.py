@@ -28,9 +28,12 @@ from core.evidencias import (AnaliseFoto, EscopoFoto, analise_de_dict,
                              evidencia_de_dict)
 from core.style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
                          montar_prompt_consolidacao_evidencias,
+                         montar_prompt_consolidacao_v2,
                          montar_prompt_correcao, montar_prompt_divergencias,
-                         montar_prompt_escopo, montar_prompt_inventario,
-                         montar_prompt_revisao)
+                         montar_prompt_escopo, montar_prompt_escopo_v2,
+                         montar_prompt_inventario, montar_prompt_revisao,
+                         montar_prompt_segunda_olhada_dirigida)
+from core.taxonomia import tipos_eletricos_presentes
 
 # Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
 # sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
@@ -893,6 +896,257 @@ def consolidar_evidencias(
         [prompt],
         response_schema=_schema_itens_com_certeza(CATEGORIAS),
         max_output_tokens=8192,
+        descricao_erro=f"a redação do cômodo '{nome_comodo}'",
+    )
+
+    try:
+        dados = _extrair_json(bruto)
+    except (json.JSONDecodeError, ValueError) as erro:
+        raise RuntimeError(
+            f"Não foi possível interpretar como JSON a redação do cômodo "
+            f"'{nome_comodo}'. Erro: {erro}\n\nInício da resposta recebida:\n"
+            f"{_trecho_para_erro(bruto)}"
+        ) from erro
+
+    registros_por_categoria = {
+        categoria: _consolidar_repetidos(cliente, categoria, _registros(dados.get(categoria)))
+        for categoria in CATEGORIAS
+    }
+    if blocos_imagem:
+        registros_por_categoria = _corrigir_itens_incertos(
+            cliente, blocos_imagem, nome_comodo, registros_por_categoria, notas_extras
+        )
+
+    resultado, incertos = {}, []
+    for categoria in CATEGORIAS:
+        texto, incertos_categoria = _montar_categoria(
+            categoria, registros_por_categoria[categoria]
+        )
+        resultado[categoria] = texto
+        incertos.extend(incertos_categoria)
+    return resultado, incertos
+
+
+# ==========================================================================
+# MOTOR V2 (desde 25/09/2026)
+#
+# Custo, que foi condição explícita: o Gemini cobra por IMAGEM (1.101 tokens
+# por foto, medido, igual em qualquer resolução). As fotos continuam sendo
+# enviadas UMA vez cada na extração. O que a V2 acrescenta sobre a V1 é a
+# segunda olhada DIRIGIDA, e só quando a checklist de cobertura aponta
+# lacuna — ela reenvia as fotos, então é a parte cara e por isso é limitada
+# por config.MAX_SEGUNDAS_OLHADAS_DIRIGIDAS.
+# ==========================================================================
+
+_VALORES_DE_ESCOPO = ["room_interior", "room_boundary", "adjacent_room",
+                      "outside", "reflection", "ambiguous"]
+
+
+def _schema_evidencia_v2(quantidade_fotos: int) -> types.Schema:
+    """Uma evidência como a V2 a pede.
+
+    "regiao" e "atributos" ficam FORA de `required` de propósito: o prompt
+    manda omitir o que não se sabe, e um schema que exige o campo obriga o
+    modelo a inventar (ver regra da região)."""
+    regiao = types.Schema(
+        type="OBJECT",
+        properties={
+            "x": types.Schema(type="NUMBER"),
+            "y": types.Schema(type="NUMBER"),
+            "largura": types.Schema(type="NUMBER"),
+            "altura": types.Schema(type="NUMBER"),
+        },
+    )
+    atributos = types.Schema(
+        type="OBJECT",
+        properties={
+            chave: types.Schema(type="STRING")
+            for chave in ("material", "cor", "acabamento", "rejunte_material",
+                          "rejunte_cor", "tipo", "estado", "defeito")
+        },
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={
+            "foto_indice": types.Schema(type="INTEGER", minimum=1,
+                                        maximum=max(1, quantidade_fotos)),
+            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
+            "observacao": types.Schema(type="STRING"),
+            # A ordem importa: descreve, decide onde aquilo está, e só então
+            # dá as notas — em vez de se comprometer com um número antes.
+            "escopo": types.Schema(type="STRING", enum=_VALORES_DE_ESCOPO),
+            "instancia": types.Schema(type="INTEGER", minimum=1),
+            "confianca_percepcao": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "confianca_escopo": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "atributos": atributos,
+            "regiao": regiao,
+        },
+        required=["foto_indice", "categoria", "observacao", "escopo",
+                  "confianca_percepcao", "confianca_escopo"],
+        property_ordering=["foto_indice", "categoria", "observacao", "escopo",
+                           "instancia", "confianca_percepcao",
+                           "confianca_escopo", "atributos", "regiao"],
+    )
+
+
+def _schema_escopo_v2(quantidade_fotos: int) -> types.Schema:
+    foto = types.Schema(
+        type="OBJECT",
+        properties={
+            "indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "escopo": types.Schema(type="STRING",
+                                   enum=["valid", "partial", "out_of_scope"]),
+            "relevancia": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
+            "reflexo": types.Schema(type="BOOLEAN"),
+            "motivo": types.Schema(type="STRING"),
+        },
+        required=["indice", "escopo", "relevancia", "ambiente_adjacente",
+                  "reflexo", "motivo"],
+        property_ordering=["indice", "escopo", "relevancia",
+                           "ambiente_adjacente", "reflexo", "motivo"],
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={
+            "fotos": types.Schema(type="ARRAY", items=foto, min_items=1),
+            "evidencias": types.Schema(
+                type="ARRAY", items=_schema_evidencia_v2(quantidade_fotos)),
+        },
+        required=["fotos", "evidencias"],
+    )
+
+
+def _evidencias_do_json(bruto: dict, ids_fotos: list, prefixo: str) -> list:
+    """Traduz índice de foto para id estável e descarta evidência órfã."""
+    quantidade = len(ids_fotos)
+    evidencias = []
+    for ordem, item in enumerate(bruto.get("evidencias", []), start=1):
+        if not isinstance(item, dict):
+            continue
+        indice = item.get("foto_indice")
+        if not isinstance(indice, int) or not (1 <= indice <= quantidade):
+            continue
+        foto_id = ids_fotos[indice - 1]
+        evidencias.append(evidencia_de_dict(item, f"{prefixo}{foto_id}#{ordem}", foto_id))
+    return evidencias
+
+
+def analisar_escopo_e_evidencias_v2(
+    cliente: genai.Client,
+    blocos_imagem: list,
+    ids_fotos: list,
+    nome_comodo: str,
+    notas_extras: str = "",
+) -> tuple:
+    """Passo 1 da V2: classifica as fotos e extrai evidências EXAUSTIVAS.
+
+    Devolve ({foto_id: AnaliseFoto}, [Evidencia]) — ainda sem validação de
+    escopo, que é determinística e mora em core.evidencias.validar_escopo."""
+    quantidade = len(blocos_imagem)
+    bruto = _gerar_com_retry(
+        cliente,
+        list(blocos_imagem) + [montar_prompt_escopo_v2(
+            nome_comodo, quantidade, notas_extras)],
+        response_schema=_schema_escopo_v2(quantidade),
+        # Inventário exaustivo gera MUITO mais itens que o resumo da V1 —
+        # um teto baixo aqui corta o JSON no meio.
+        max_output_tokens=32768,
+        descricao_erro=f"a análise de escopo de '{nome_comodo}'",
+    )
+    dados = _extrair_json(bruto)
+
+    analises = {}
+    for item in dados.get("fotos", []):
+        if not isinstance(item, dict):
+            continue
+        indice = item.get("indice")
+        if not isinstance(indice, int) or not (1 <= indice <= quantidade):
+            continue
+        foto_id = ids_fotos[indice - 1]
+        analises[foto_id] = analise_de_dict(item, foto_id, nome_comodo)
+
+    # Foto que o modelo não classificou não vira foto válida por omissão.
+    for posicao, foto_id in enumerate(ids_fotos, start=1):
+        if foto_id not in analises:
+            analises[foto_id] = AnaliseFoto(
+                foto_id=foto_id, comodo_alvo=nome_comodo,
+                escopo=EscopoFoto.FORA_DE_ESCOPO,
+                motivo=f"o modelo não classificou a foto {posicao} deste lote",
+            )
+
+    return analises, _evidencias_do_json(dados, ids_fotos, "")
+
+
+def segunda_olhada_dirigida(
+    cliente: genai.Client,
+    blocos_imagem: list,
+    ids_fotos: list,
+    nome_comodo: str,
+    instrucao: str,
+    procurando: list,
+    notas_extras: str = "",
+    marca: str = "d1",
+) -> list:
+    """Olha as MESMAS fotos procurando só o que a cobertura apontou.
+
+    Devolve evidências novas — nunca texto de laudo. Lista vazia é resposta
+    legítima: melhor a lacuna continuar aberta do que um item inventado."""
+    quantidade = len(blocos_imagem)
+    schema = types.Schema(
+        type="OBJECT",
+        properties={
+            "evidencias": types.Schema(
+                type="ARRAY", items=_schema_evidencia_v2(quantidade)),
+        },
+        required=["evidencias"],
+    )
+    try:
+        bruto = _gerar_com_retry(
+            cliente,
+            list(blocos_imagem) + [montar_prompt_segunda_olhada_dirigida(
+                nome_comodo, quantidade, instrucao, procurando, notas_extras)],
+            response_schema=schema,
+            max_output_tokens=8192,
+            descricao_erro=f"a segunda olhada dirigida em '{nome_comodo}'",
+        )
+        dados = _extrair_json(bruto)
+    except Exception as erro:
+        # Uma busca dirigida que falha não pode derrubar o cômodo: a lacuna
+        # continua aberta e vira pendência, que é o comportamento seguro.
+        print(f"  Segunda olhada dirigida falhou ({erro.__class__.__name__}) — "
+              "a lacuna segue para pendência.", flush=True)
+        return []
+    return _evidencias_do_json(dados, ids_fotos, f"{marca}:")
+
+
+def consolidar_evidencias_v2(
+    cliente: genai.Client,
+    nome_comodo: str,
+    resultado_escopo,
+    blocos_imagem: list,
+    estado_rodape: str = "",
+    notas_extras: str = "",
+) -> tuple:
+    """Passo final: escreve o laudo a partir das evidências APROVADAS.
+
+    Chamada de texto puro — as fotos não vão junto, de propósito. Depois da
+    redação o texto passa pelas mesmas travas de sempre: consolidação de
+    itens repetidos, segunda olhada nos itens de certeza baixa e
+    _montar_categoria, que limpa testes indevidos e separa as pendências."""
+    por_categoria = resultado_escopo.por_categoria()
+    tipos = tipos_eletricos_presentes(
+        [e.observacao for e in por_categoria.get("eletrico", [])]
+    )
+    prompt = montar_prompt_consolidacao_v2(
+        nome_comodo, CATEGORIAS, por_categoria,
+        resultado_escopo.cobertura_incompleta, tipos, estado_rodape, notas_extras,
+    )
+    bruto = _gerar_com_retry(
+        cliente,
+        [prompt],
+        response_schema=_schema_itens_com_certeza(CATEGORIAS),
+        max_output_tokens=16384,
         descricao_erro=f"a redação do cômodo '{nome_comodo}'",
     )
 

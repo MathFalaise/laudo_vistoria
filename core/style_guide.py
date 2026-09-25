@@ -854,3 +854,321 @@ def montar_prompt_consolidacao_evidencias(
         'começando com "*", ou exatamente "Não se aplica." / "Sem '
         'observações."), "motivo" e "certeza".'
     )
+
+
+# ==========================================================================
+# ESCOPO E EVIDÊNCIAS — V2 (desde 25/09/2026)
+#
+# A V1 mostrou, no benchmark de 107 fotos, que separar "o que vi" de "isso é
+# daqui" acerta mais fatos que o caminho direto foto -> laudo. E mostrou dois
+# defeitos, que estes prompts atacam:
+#
+#   - ela resumia. Porta-papel, ganchos e toalheiro sumiram. Daí o pedido de
+#     inventário EXAUSTIVO, item por item, instância por instância;
+#   - ela tratava elemento de fronteira como ambiente vizinho. Daí a
+#     taxonomia de escopo com ROOM_BOUNDARY, explicada com os exemplos que
+#     de fato deram errado.
+# ==========================================================================
+
+INSTRUCAO_ESCOPO_V2 = """
+ESCOPO — a pergunta mais importante desta etapa.
+
+Estas fotos foram guardadas na pasta de um cômodo, mas ESTAR NA PASTA NÃO
+PROVA NADA. O fotógrafo enquadra o que cabe no visor: a foto da cozinha pega a
+porta, e pela porta se vê o corredor; o espelho do banheiro reflete o quarto.
+
+Para CADA foto, classifique em "escopo":
+- "valid": a foto é predominantemente do cômodo alvo.
+- "partial": mostra o cômodo alvo, mas também ambiente vizinho, reflexo ou
+  região que você não consegue atribuir com segurança.
+- "out_of_scope": não é do cômodo alvo.
+
+Informe também "relevancia" (0-100), "ambiente_adjacente", "reflexo" e
+"motivo" em uma frase.
+
+Nenhuma foto é apagada por causa disso.
+"""
+
+INSTRUCAO_EVIDENCIAS_V2 = """
+EVIDÊNCIAS — inventário EXAUSTIVO, não resumo.
+
+Liste CADA coisa visualmente identificável como uma evidência separada. Esta
+etapa não escreve laudo: não use "*", não junte itens, não conte totais entre
+fotos, não escreva frase de laudo. Descreva o que está NAQUELA foto.
+
+EXAUSTIVIDADE — leia com atenção, é o ponto desta etapa.
+Não resuma um conjunto numa evidência só. "Acessórios do banheiro" é resposta
+errada. Num banheiro, cada um destes é uma evidência própria quando aparecer:
+bacia sanitária; caixa acoplada; assento; tampa; acionamento da descarga;
+bancada; cuba; torneira; sifão; engate; gabinete; espelho; nicho; box;
+chuveiro; ducha higiênica; cada registro; porta-papel; porta-toalha; cada
+gancho; saboneteira; porta-shampoo; prateleira. Peça pequena fixada na parede
+é a que mais se perde — procure-a de propósito.
+
+ESCOPO DE CADA EVIDÊNCIA — campo "escopo", com um destes valores:
+- "room_interior": está dentro do cômodo alvo.
+- "room_boundary": é ESTRUTURA DO CÔMODO na divisa com outro ambiente.
+  Use este valor para porta, folha, batente, vistas, guarnição, SOLEIRA,
+  janela, porta-janela, PEITORIL, esquadria, caixilho e trilho.
+  ATENÇÃO — este é o erro mais comum nesta etapa: essas peças mostram o outro
+  lado por natureza, e mesmo assim PERTENCEM ao cômodo. A soleira continua
+  sendo do cômodo mesmo dividindo dois pisos diferentes. A porta-janela
+  continua sendo do cômodo mesmo dando para a varanda. O peitoril continua
+  sendo do cômodo mesmo mostrando a rua. NÃO classifique nada disso como
+  "adjacent_room".
+- "adjacent_room": é de OUTRO ambiente, visto daqui (a parede do corredor
+  vista pela porta aberta, o móvel do quarto visto do banheiro).
+- "outside": é a área externa — o telhado do vizinho, o jardim, a rua. Ou
+  seja, o CENÁRIO visto através da abertura, não a abertura.
+- "reflection": é a imagem refletida num espelho ou vidro, não o objeto real.
+  Na dúvida entre objeto real e reflexo, use "reflection": o objeto real vai
+  aparecer em outra foto, e contar duas vezes é pior.
+- "ambiguous": você não conseguiu decidir.
+
+CONFIANÇAS — dois números INDEPENDENTES:
+- "confianca_percepcao" (0-100): o quanto ESTA IMAGEM deixa claro o que é.
+  Desfoque, sombra, distância e oclusão derrubam este número.
+- "confianca_escopo" (0-100): o quanto você tem certeza da classificação de
+  escopo acima.
+  Uma parede de corredor pode estar nitidíssima na foto da cozinha: percepção
+  99, escopo 10. Não repita o mesmo número nos dois campos por hábito.
+
+ATRIBUTOS — campo "atributos", um objeto com as chaves que você conseguir
+preencher, cada uma com UM valor curto:
+  "material", "cor", "acabamento", "rejunte_material", "rejunte_cor",
+  "tipo", "estado", "defeito".
+Separe o que é de coisas diferentes: numa parede de azulejo branco com rejunte
+cinza, "cor" é branca e "rejunte_cor" é cinza — não misture os dois.
+Preencha só o que você vê. Material ambíguo: deixe "material" de fora e diga
+na observação que é ambíguo, em vez de escolher um.
+
+INSTÂNCIA — campo "instancia": quando o mesmo tipo de coisa aparece várias
+vezes, numere (1, 2, 3...) e faça uma evidência para cada. Isso vale
+especialmente para placas elétricas, tomadas, interruptores, gavetas, portas
+de armário e ganchos.
+
+REGIÃO — campo "regiao", opcional: x, y, largura e altura entre 0 e 1. Se você
+não souber com segurança, OMITA. Região errada é pior que região nenhuma.
+
+Regra que vale acima de todas nesta etapa: é melhor deixar de registrar uma
+evidência do que registrar uma que pertence a outro ambiente. Mas NÃO deixe
+de registrar uma peça pequena do próprio cômodo — é o erro oposto, e ele
+também chega ao documento assinado.
+"""
+
+
+def montar_prompt_escopo_v2(nome_comodo: str, quantidade_fotos: int,
+                            notas_extras: str = "") -> str:
+    """Passo 1 da V2: classificar as fotos e extrair evidências exaustivas.
+
+    Repare no que este prompt NÃO faz: não pede texto de laudo, não menciona
+    formato de item, não fala em "*". Pedir as duas coisas na mesma chamada
+    foi o erro da arquitetura original — o modelo entra em modo "redator" e
+    passa a justificar a frase bonita em vez de julgar se aquilo é do cômodo."""
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel (contexto; elas "
+            "descrevem o PADRÃO da casa, não o conteúdo deste cômodo):\n"
+            f"{notas_extras.strip()}\n\n"
+        )
+
+    return (
+        "Você está examinando fotos de uma vistoria de imóvel residencial no "
+        "Brasil. Esta etapa NÃO escreve laudo: ela separa o que pertence ao "
+        "cômodo do que não pertence, e lista exaustivamente o que há.\n\n"
+        f"Cômodo alvo: {nome_comodo}\n"
+        f"Foram enviadas {quantidade_fotos} foto(s), numeradas de 1 a "
+        f"{quantidade_fotos} na ordem em que aparecem.\n\n"
+        f"{bloco_notas}"
+        f"{INSTRUCAO_ESCOPO_V2.strip()}\n\n"
+        f"{INSTRUCAO_EVIDENCIAS_V2.strip()}\n\n"
+        "IMPORTANTE — formato da resposta:\n"
+        "Responda APENAS com um objeto JSON válido, sem markdown, com as "
+        'chaves "fotos" e "evidencias". "fotos" tem um objeto por foto '
+        f'enviada, com "indice" de 1 a {quantidade_fotos}.'
+    )
+
+
+def montar_prompt_segunda_olhada_dirigida(
+    nome_comodo: str, quantidade_fotos: int, instrucao: str,
+    procurando: list, notas_extras: str = "",
+) -> str:
+    """Segunda olhada DIRIGIDA (pedido, item 23).
+
+    Quando a checklist de cobertura aponta um tipo sem evidência, não se
+    reprocessa o cômodo inteiro: manda-se o modelo olhar as mesmas fotos
+    procurando SÓ aquilo. É mais barato e acha mais — atenção dividida entre
+    oito categorias é o que faz o porta-papel sumir.
+
+    O resultado são EVIDÊNCIAS novas, nunca texto de laudo."""
+    alvos = "; ".join(procurando)
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = f"Contexto do imóvel:\n{notas_extras.strip()}\n\n"
+
+    return (
+        "Segunda passagem nas MESMAS fotos de uma vistoria, agora com um alvo "
+        "único.\n\n"
+        f"Cômodo alvo: {nome_comodo}\n"
+        f"Foram enviadas {quantidade_fotos} foto(s), numeradas de 1 a "
+        f"{quantidade_fotos}.\n\n"
+        f"{bloco_notas}"
+        f"TAREFA: {instrucao}\n\n"
+        f"O que a primeira passagem não encontrou: {alvos}.\n\n"
+        "Se você encontrar, registre uma evidência POR OBJETO, com a mesma "
+        "estrutura de sempre. Se NÃO encontrar, devolva a lista vazia — não "
+        "invente para preencher a lacuna. Ausência de evidência é uma resposta "
+        "legítima e é melhor que um item inventado num documento assinado.\n\n"
+        f"{INSTRUCAO_EVIDENCIAS_V2.strip()}\n\n"
+        "IMPORTANTE — formato da resposta:\n"
+        'Responda APENAS com um objeto JSON válido, com a chave "evidencias".'
+    )
+
+
+def montar_prompt_consolidacao_v2(
+    nome_comodo: str, categorias: list, evidencias_por_categoria: dict,
+    cobertura_incompleta: bool, tipos_eletricos: list,
+    estado_rodape: str = "", notas_extras: str = "",
+) -> str:
+    """Passo final da V2: escrever o laudo A PARTIR DAS EVIDÊNCIAS APROVADAS,
+    sem as fotos.
+
+    Tirar as imagens daqui é deliberado (item 32). Com elas na mão, o modelo
+    volta a descrever o que vê, inclusive o que o código acabou de descartar
+    por ser de outro ambiente. Sem elas, o filtro deixa de ser um pedido no
+    prompt e vira propriedade do que chega até ele.
+
+    A estrutura que chega é rica de propósito: atributos, instâncias e
+    confiança. A V1 entregava só o texto da observação, e o redator perdia
+    "dobradiça dourada" para "dobradiças metálicas"."""
+    blocos_categoria = "\n".join(
+        f'- "{categoria}": {INSTRUCAO_CATEGORIA[categoria].strip()}'
+        for categoria in categorias
+    )
+
+    linhas = []
+    for categoria in categorias:
+        evidencias = evidencias_por_categoria.get(categoria, [])
+        rotulo = ROTULOS_CATEGORIA[categoria]
+        if not evidencias:
+            linhas.append(f"{rotulo}: (nenhuma evidência aprovada)")
+            continue
+        itens = []
+        for evidencia in evidencias:
+            atributos = ", ".join(
+                f"{chave}={valor}" for chave, valor in sorted(evidencia.atributos.items())
+            )
+            marcas = []
+            if evidencia.e_fronteira:
+                marcas.append("estrutura de divisa do cômodo")
+            if evidencia.corroborada_por:
+                marcas.append(f"visto em +{len(evidencia.corroborada_por)} foto(s)")
+            if evidencia.atributos_em_conflito:
+                marcas.append("as fotos divergem em: "
+                              + ", ".join(evidencia.atributos_em_conflito))
+            itens.append(
+                f"  - [{evidencia.id}] foto {evidencia.foto_id}"
+                f" (inst. {evidencia.instancia}, confiança {evidencia.confianca_final})"
+                f": {evidencia.observacao}"
+                + (f"\n      atributos: {atributos}" if atributos else "")
+                + (f"\n      obs.: {'; '.join(marcas)}" if marcas else "")
+            )
+        linhas.append(f"{rotulo} ({len(evidencias)} evidência(s)):\n" + "\n".join(itens))
+    bloco_evidencias = "\n".join(linhas)
+
+    bloco_notas = ""
+    if notas_extras.strip():
+        bloco_notas = (
+            "Informações confirmadas sobre este imóvel (use estes dados exatos "
+            "sempre que se aplicarem, em vez de advinhar):\n"
+            f"{notas_extras.strip()}\n\n"
+        )
+
+    aviso_cobertura = ""
+    if cobertura_incompleta:
+        aviso_cobertura = (
+            "COBERTURA INCOMPLETA: as fotos não cobrem este cômodo por "
+            "inteiro. Você NÃO pode concluir que algo não existe só porque "
+            'não há evidência dele. Se for usar "Não se aplica." numa '
+            "categoria, dê certeza BAIXA.\n\n"
+        )
+
+    bloco_rodape = ""
+    if estado_rodape == "baseboard_absent":
+        bloco_rodape = (
+            "RODAPÉ: as evidências indicam que NÃO há rodapé neste cômodo (o "
+            "revestimento da parede desce até o piso). NÃO escreva rodapé.\n\n"
+        )
+    elif estado_rodape == "baseboard_not_visible":
+        bloco_rodape = (
+            "RODAPÉ: a junção entre parede e piso não aparece nas fotos. NÃO "
+            "afirme que há rodapé nem que não há — omita o assunto.\n\n"
+        )
+
+    bloco_eletrico = ""
+    if tipos_eletricos:
+        bloco_eletrico = (
+            "COMPONENTES ELÉTRICOS — regra própria, diferente das demais "
+            "categorias.\n"
+            "Os tipos encontrados neste cômodo foram: "
+            + ", ".join(tipos_eletricos) + ".\n"
+            "O que importa aqui é NOMEAR OS TIPOS e a composição, não contar "
+            "unidades. NÃO é obrigatório escrever \"sete placas\", \"duas "
+            "tomadas\" ou \"três interruptores\": a contagem de placas quase "
+            "sempre sai errada e deixa a frase pior. Prefira a composição, no "
+            "espírito de \"com placas em polímero na cor branca, sendo "
+            "tomadas, interruptores e placa cega\" — sem copiar esse exemplo "
+            "ao pé da letra.\n"
+            "Só escreva quantidade de item elétrico quando ela estiver "
+            "claramente determinada E for realmente útil (por exemplo, o "
+            "número de pontos de iluminação do teto).\n"
+            "Cuidado: \"tomada dupla\", \"interruptor triplo\" e \"módulo\" "
+            "são CONFIGURAÇÕES da peça, não quantidade de placas.\n\n"
+        )
+
+    chaves = ", ".join(f'"{categoria}"' for categoria in categorias)
+    return (
+        f"{_regras()}\n\n"
+        f"Cômodo: {nome_comodo}\n\n"
+        f"{bloco_notas}"
+        "Abaixo estão as EVIDÊNCIAS já validadas deste cômodo. Elas passaram "
+        "por uma etapa que separou o que pertence a este cômodo do que "
+        "pertence a ambiente vizinho ou é reflexo — o que foi descartado NÃO "
+        "está nesta lista e não deve aparecer no laudo.\n\n"
+        f"{bloco_evidencias}\n\n"
+        f"{aviso_cobertura}{bloco_rodape}{bloco_eletrico}"
+        "REGRAS DESTA ETAPA — muito importante:\n"
+        "- Escreva o laudo APENAS a partir das evidências acima. Você não tem "
+        "as fotos nesta etapa e não deve supor nada além do que está listado.\n"
+        "- NÃO acrescente material, cor, quantidade, defeito, ferragem, "
+        "equipamento ou item que não apareça nas evidências.\n"
+        "- NÃO PERCA DETALHE. Se a evidência diz \"dobradiça metálica "
+        "dourada\", escreva dourada — não troque por \"metálica\". Se diz "
+        "\"porta almofadada\", não escreva \"lisa\". Se diz \"banheira de "
+        "hidromassagem\", não escreva só \"banheira\". O atributo mais "
+        "específico sustentado pela evidência é o que vai para o laudo.\n"
+        "- NÃO DEIXE ITEM DE FORA. Cada evidência aprovada tem que aparecer "
+        "em alguma linha. Peça pequena (porta-papel, gancho, saboneteira, "
+        "porta-toalha) é item de laudo como qualquer outro — não agrupe em "
+        "\"acessórios\" nem omita por ser pequena.\n"
+        "- Várias evidências podem descrever o MESMO objeto visto em fotos "
+        "diferentes — junte-as numa linha só. Evidências com instâncias "
+        "diferentes são objetos diferentes.\n"
+        "- Quando a quantidade for relevante e estiver clara (portas, "
+        "janelas, armários, gavetas, peças de mobília), preserve-a. Se estiver "
+        "incerta, descreva sem número em vez de chutar.\n"
+        "- Evidência com confiança baixa vira item com certeza baixa.\n"
+        "- Se as evidências divergem num atributo, escolha a melhor "
+        "sustentada e dê certeza baixa ao item; os demais atributos "
+        "continuam valendo.\n\n"
+        "Instruções de cada categoria:\n\n"
+        f"{blocos_categoria}\n\n"
+        f"{INSTRUCAO_CERTEZA.strip()}\n\n"
+        "IMPORTANTE — formato da resposta:\n"
+        "Responda APENAS com um objeto JSON válido, sem texto antes ou "
+        f"depois, sem markdown. Chaves: {chaves}. Cada chave é uma LISTA de "
+        'itens, e cada item é um objeto com "texto" (UMA linha do laudo, '
+        'começando com "*", ou exatamente "Não se aplica." / "Sem '
+        'observações."), "motivo" e "certeza".'
+    )

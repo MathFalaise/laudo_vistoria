@@ -453,12 +453,20 @@ def test_motor_classico_continua_disponivel(pasta_com_fotos, monkeypatch):
 
 
 def test_processar_comodo_escolhe_o_motor(pasta_com_fotos, monkeypatch):
+    """Os três motores convivem durante a validação (pedido, item 40)."""
     chamados = []
     monkeypatch.setattr(pipeline, "processar_comodo_classico",
                         lambda *a, **k: chamados.append("classico"))
     monkeypatch.setattr(pipeline, "processar_comodo_evidencias",
-                        lambda *a, **k: chamados.append("evidencias"))
+                        lambda *a, **k: chamados.append("v1"))
+    monkeypatch.setattr(pipeline, "processar_comodo_v2",
+                        lambda *a, **k: chamados.append("v2"))
 
     pipeline.processar_comodo(None, pasta_com_fotos, "Cozinha", usar_evidencias=False)
+    # sem motor explícito, "com evidências" significa o motor atual
     pipeline.processar_comodo(None, pasta_com_fotos, "Cozinha", usar_evidencias=True)
-    assert chamados == ["classico", "evidencias"]
+    pipeline.processar_comodo(None, pasta_com_fotos, "Cozinha",
+                              motor=pipeline.MOTOR_V1)
+    pipeline.processar_comodo(None, pasta_com_fotos, "Cozinha",
+                              motor=pipeline.MOTOR_CLASSICO)
+    assert chamados == ["classico", "v2", "v1", "classico"]

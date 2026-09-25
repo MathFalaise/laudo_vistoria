@@ -83,6 +83,12 @@ USAR_MOTOR_DE_EVIDENCIAS = os.environ.get("LAUDO_MOTOR_EVIDENCIAS", "") == "1"
 # olha um punhado de fotos por vez do que quando recebe sessenta.
 FOTOS_POR_LOTE_ESCOPO = 10
 
+# Quantas buscas DIRIGIDAS a V2 pode fazer por comodo quando a checklist de
+# cobertura aponta lacuna (ver core/cobertura.py). Cada uma reenvia as fotos,
+# entao e a parte cara do motor novo: tres cobrem os grupos que mais somem
+# (acessorios de parede, esquadrias, eletricos) sem dobrar o custo do comodo.
+MAX_SEGUNDAS_OLHADAS_DIRIGIDAS = 3
+
 # Extensões de imagem aceitas dentro das pastas de cômodo
 EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")
 

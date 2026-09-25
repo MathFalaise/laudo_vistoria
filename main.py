@@ -91,6 +91,15 @@ def main():
         action="store_true",
         help="Força o motor antigo (1 chamada por cômodo, fotos direto para o laudo).",
     )
+    motor.add_argument(
+        "--evidencias-v1",
+        action="store_true",
+        help=(
+            "Motor de evidências da primeira geração, mantido para comparação "
+            "(sem taxonomia canônica, sem elementos de fronteira e sem "
+            "checklist de cobertura)."
+        ),
+    )
     parser.add_argument(
         "--sem-conferencia",
         action="store_true",
@@ -115,10 +124,22 @@ def main():
             return
         nomes_comodo = [nome for nome in todos if nome in args.comodos]
 
-    usar_evidencias = args.evidencias or (USAR_MOTOR_DE_EVIDENCIAS and not args.classico)
-    print("Motor: " + ("evidências (com validação de escopo por foto)"
-                       if usar_evidencias else "clássico (1 chamada por cômodo)"),
-          flush=True)
+    from core.pipeline import MOTOR_CLASSICO, MOTOR_V1, MOTOR_V2
+
+    if args.classico:
+        motor_escolhido = MOTOR_CLASSICO
+    elif args.evidencias_v1:
+        motor_escolhido = MOTOR_V1
+    elif args.evidencias or USAR_MOTOR_DE_EVIDENCIAS:
+        motor_escolhido = MOTOR_V2
+    else:
+        motor_escolhido = MOTOR_CLASSICO
+    usar_evidencias = motor_escolhido != MOTOR_CLASSICO
+    print("Motor: " + {
+        MOTOR_CLASSICO: "clássico (1 chamada por cômodo)",
+        MOTOR_V1: "evidências v1 (escopo por foto)",
+        MOTOR_V2: "evidências v2 (escopo, fronteira, taxonomia e cobertura)",
+    }[motor_escolhido], flush=True)
 
     cliente = criar_cliente()
 
@@ -133,7 +154,7 @@ def main():
         try:
             resultado = processar_comodo(
                 cliente, pasta_comodo, nome_comodo, args.notas,
-                usar_evidencias=usar_evidencias,
+                usar_evidencias=usar_evidencias, motor=motor_escolhido,
                 progresso=lambda texto: print(f"  {texto}", flush=True),
             )
         except Exception as erro:

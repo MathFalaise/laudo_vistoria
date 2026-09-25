@@ -48,6 +48,15 @@ PREFIXO_CONFLITO = "CONFLITO DE ESCOPO — não entrou no laudo"
 
 TIPO_CONFLITO_ESCOPO = "scope_conflict"
 
+# Os três motores convivem durante a validação (pedido, item 40): o clássico
+# é o baseline que gerou as vistorias reais, a V1 é o primeiro motor de
+# evidências, e a V2 é o atual. Nenhum é removido enquanto o benchmark não
+# decidir.
+MOTOR_CLASSICO = "classico"
+MOTOR_V1 = "evidencias_v1"
+MOTOR_V2 = "evidencias_v2"
+MOTORES = (MOTOR_CLASSICO, MOTOR_V1, MOTOR_V2)
+
 
 @dataclass
 class ResultadoComodo:
@@ -274,6 +283,7 @@ def processar_comodo(
     ids_fotos: list | None = None,
     progresso=None,
     caminhos: list | None = None,
+    motor: str | None = None,
 ) -> ResultadoComodo:
     """Ponto de entrada único. Escolhe o motor e devolve sempre a mesma coisa.
 
@@ -284,11 +294,176 @@ def processar_comodo(
 
     if usar_evidencias is None:
         usar_evidencias = USAR_MOTOR_DE_EVIDENCIAS
-    if usar_evidencias:
+    if motor is None:
+        motor = MOTOR_V2 if usar_evidencias else MOTOR_CLASSICO
+    if motor == MOTOR_V2:
+        return processar_comodo_v2(
+            cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
+            progresso, caminhos,
+        )
+    if motor == MOTOR_V1:
         return processar_comodo_evidencias(
             cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
             progresso, caminhos,
         )
     return processar_comodo_classico(
         cliente, pasta_comodo, nome_comodo, notas_extras, caminhos
+    )
+
+
+# ==========================================================================
+# MOTOR V2 (desde 25/09/2026)
+# ==========================================================================
+
+def processar_comodo_v2(
+    cliente,
+    pasta_comodo: str | None = None,
+    nome_comodo: str = "",
+    notas_extras: str = "",
+    ids_fotos: list | None = None,
+    progresso=None,
+    caminhos: list | None = None,
+) -> ResultadoComodo:
+    """FOTOS -> EVIDÊNCIAS EXAUSTIVAS -> ESCOPO -> FRONTEIRA -> TAXONOMIA
+    -> COBERTURA -> CONSOLIDAÇÃO -> LAUDO.
+
+    A diferença prática em relação à V1, medida no benchmark de 107 fotos:
+
+    - elemento de fronteira (soleira, peitoril, porta-janela) é recuperado
+      por código, em vez de virar conflito e sumir do laudo;
+    - a categoria final é decidida por código, então box não vai parar em
+      Porta nem soleira em Piso;
+    - a checklist de cobertura reclama do que faltou, e a segunda olhada
+      DIRIGIDA vai buscar — foi assim que porta-papel, ganchos e toalheiro
+      sumiram sem ninguém notar.
+
+    Sobre custo: as fotos vão UMA vez na extração. A segunda olhada dirigida
+    reenvia as fotos e por isso é limitada por
+    config.MAX_SEGUNDAS_OLHADAS_DIRIGIDAS; ela só roda quando há lacuna."""
+    import os
+
+    from core.cobertura import encontrar_lacunas, instrucoes_de_segunda_olhada
+    from core.config import (FOTOS_POR_LOTE_ESCOPO, MAX_SEGUNDAS_OLHADAS_DIRIGIDAS)
+    from core.evidencias import TipoConflito
+    from core.gemini_client import (analisar_escopo_e_evidencias_v2,
+                                    consolidar_evidencias_v2,
+                                    segunda_olhada_dirigida)
+    from core.taxonomia import estado_do_rodape
+
+    caminhos = _caminhos_das_fotos(pasta_comodo, caminhos)
+    if not caminhos:
+        return ResultadoComodo(nome_comodo=nome_comodo, dados={}, incertos=[])
+
+    identificadores = ids_fotos or [os.path.basename(c) for c in caminhos]
+    if len(identificadores) != len(caminhos):
+        raise ValueError(
+            f"{len(identificadores)} id(s) de foto para {len(caminhos)} arquivo(s) "
+            f"em '{nome_comodo}' — os dois têm que ser paralelos."
+        )
+
+    analises: dict = {}
+    evidencias: list = []
+    blocos_todos: list = []
+
+    lotes_caminhos = _lotes(caminhos, FOTOS_POR_LOTE_ESCOPO)
+    lotes_ids = _lotes(identificadores, FOTOS_POR_LOTE_ESCOPO)
+
+    for numero, (lote_caminhos, lote_ids) in enumerate(
+            zip(lotes_caminhos, lotes_ids), start=1):
+        if progresso:
+            progresso(f"evidências: lote {numero}/{len(lotes_caminhos)} "
+                      f"({len(lote_caminhos)} foto(s))")
+        blocos = [codificar_imagem(caminho) for caminho in lote_caminhos]
+        blocos_todos.extend(blocos)
+        analises_lote, evidencias_lote = analisar_escopo_e_evidencias_v2(
+            cliente, blocos, lote_ids, nome_comodo, notas_extras
+        )
+        analises.update(analises_lote)
+        evidencias.extend(evidencias_lote)
+
+    # O CÓDIGO decide. Nada abaixo depende de o modelo ter obedecido o prompt.
+    resultado_escopo = validar_escopo(evidencias, analises, nome_comodo)
+    if progresso:
+        progresso(
+            f"escopo: {len(resultado_escopo.aceitas)} aceita(s), "
+            f"{len(resultado_escopo.descartadas)} descartada(s), "
+            f"{resultado_escopo.promovidas_para_fronteira} recuperada(s) como "
+            f"estrutura do cômodo, {len(resultado_escopo.conflitos)} conflito(s)"
+        )
+
+    # --- cobertura: o que faltou, e uma busca dirigida para cada grupo -----
+    lacunas = encontrar_lacunas(nome_comodo, resultado_escopo.aceitas)
+    instrucoes = instrucoes_de_segunda_olhada(lacunas)[:MAX_SEGUNDAS_OLHADAS_DIRIGIDAS]
+    achadas_na_segunda = 0
+    for numero, pedido in enumerate(instrucoes, start=1):
+        if progresso:
+            progresso(f"segunda olhada dirigida {numero}/{len(instrucoes)}: "
+                      f"{', '.join(pedido['procurando'])}")
+        novas = segunda_olhada_dirigida(
+            cliente, blocos_todos, identificadores, nome_comodo,
+            pedido["instrucao"], pedido["procurando"], notas_extras,
+            marca=f"d{numero}",
+        )
+        if novas:
+            evidencias.extend(novas)
+            achadas_na_segunda += len(novas)
+
+    if achadas_na_segunda:
+        # Revalida TUDO junto: as evidências novas participam da corroboração
+        # e da detecção de contradição como qualquer outra.
+        resultado_escopo = validar_escopo(evidencias, analises, nome_comodo)
+        lacunas = encontrar_lacunas(nome_comodo, resultado_escopo.aceitas)
+        if progresso:
+            progresso(f"a busca dirigida achou {achadas_na_segunda} evidência(s); "
+                      f"restam {len(lacunas)} lacuna(s)")
+
+    # --- rodapé: três estados, decididos por código ------------------------
+    observacoes_de_superficie = [
+        e.observacao for e in resultado_escopo.aceitas
+        if e.categoria in ("piso", "paredes")
+    ]
+    rodape = estado_do_rodape(observacoes_de_superficie)
+
+    conflitos = list(resultado_escopo.conflitos)
+    # Lacuna que sobreviveu à busca dirigida vira pendência: o sistema não
+    # afirma que o item não existe, ele diz que não achou (item 22).
+    for lacuna in lacunas:
+        conflitos.append(ConflitoEscopo(
+            categoria=lacuna.categoria,
+            resumo=(f"não encontrei evidência de {lacuna.rotulo} neste cômodo. "
+                    "Isso NÃO quer dizer que não exista — quer dizer que as "
+                    "fotos não mostraram, ou que passou despercebido."),
+            evidencias=[], fotos=[],
+            tipo=TipoConflito.COBERTURA,
+        ))
+
+    if not resultado_escopo.aceitas:
+        dados = {categoria: "" for categoria in CATEGORIAS}
+        incertos = [{
+            "categoria": "obs", "texto": "", "certeza": 0,
+            "motivo": (
+                "nenhuma evidência deste cômodo passou pela validação de escopo "
+                f"({resultado_escopo.fotos_utilizaveis} de "
+                f"{resultado_escopo.fotos_totais} foto(s) utilizável(is)) — o "
+                "laudo deste cômodo não foi escrito, confira as fotos"
+            ),
+        }]
+    else:
+        if progresso:
+            progresso("redigindo a partir das evidências aprovadas")
+        dados, incertos = consolidar_evidencias_v2(
+            cliente, nome_comodo, resultado_escopo, blocos_todos,
+            estado_rodape=rodape.value, notas_extras=notas_extras,
+        )
+
+    return ResultadoComodo(
+        nome_comodo=nome_comodo,
+        dados=dados,
+        incertos=incertos,
+        evidencias=evidencias,
+        analises=analises,
+        conflitos=conflitos,
+        fotos_utilizaveis=resultado_escopo.fotos_utilizaveis,
+        fotos_totais=resultado_escopo.fotos_totais,
+        cobertura_incompleta=resultado_escopo.cobertura_incompleta,
     )
