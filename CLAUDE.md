@@ -7,12 +7,26 @@ grava o resultado em arquivos `.txt`.
 
 ## Uso
 
+Duas frentes, **um motor só** (`core/`). O que sai de laudo é igual nas duas.
+
+**Aplicação web** (desde 25/09/2026) — navegador, celular, qualquer sistema:
+
+```bash
+docker compose up -d        # http://localhost:8000
+```
+
+Ver `docs/instalacao.md`, `docs/producao.md` e `docs/backup.md`.
+
+**Linha de comando** — continua funcionando, sem alteração:
+
 ```bash
 python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
 python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
+python main.py "C:\caminho" --evidencias       # com validação de escopo por foto
 python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
 python conferir.py "C:\caminho\para\o\imovel"  # confere as fotos contra o laudo
 python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
+python -m pytest                              # 178 testes, nenhum chama a API
 ```
 
 O `main.py` já roda a conferência no fim (desligue com `--sem-conferencia`);
@@ -28,6 +42,24 @@ houver pendência aberta (a não ser com `--ignorar-pendencias`).
 Requer a variável de ambiente `GEMINI_API_KEY` definida antes de rodar
 (gerada em https://aistudio.google.com/apikey, num projeto com
 faturamento ativo — ver "Decisões importantes").
+
+## Onde fica cada coisa
+
+```
+core/          MOTOR. Regra de laudo mora só aqui — CLI e web chamam isto.
+  evidencias.py  escopo e validação determinística (o que pertence ao cômodo)
+  pipeline.py    orquestração: fotos -> evidências -> escopo -> laudo
+  style_guide.py, report_writer.py, gemini_client.py, validacao.py, ...
+backend/       API FastAPI + SQLite. Traduz entre o motor e o banco.
+frontend/      React + TypeScript + Vite. Responsivo, celular primeiro.
+tests/         178 testes. Nenhum chama o Gemini.
+*.py (raiz)    CLI + aliases de compatibilidade para core/
+```
+
+Os módulos na raiz com nome de módulo do motor (`config.py`,
+`report_writer.py`, ...) são **aliases do mesmo objeto de módulo** que está em
+`core/`, não cópias. Foi assim que o CLI continuou funcionando sem
+alteração, e é o que garante que não existam duas versões da mesma regra.
 
 ## Arquitetura
 
@@ -197,6 +229,66 @@ faturamento ativo — ver "Decisões importantes").
   descartada, assim como a que se justifica com "o inventário não menciona"
   (`_ARGUMENTO_DE_AUSENCIA`). Sem elas, ela propôs apagar a trinca e o
   estufamento que o vistoriador tinha confirmado em campo.
+- **Evidências e escopo (desde 25/09/2026):** o problema que motivou a
+  evolução arquitetural. Uma foto guardada na pasta "Cozinha" NÃO prova que o
+  que aparece nela é da cozinha: o fotógrafo enquadra a porta e pela porta se
+  vê o corredor, o espelho do banheiro reflete o quarto, a última foto do
+  quarto pega meia parede da sala. O motor antigo transformava tudo isso em
+  afirmação sobre o cômodo — e laudo é documento assinado.
+
+  A correção NÃO foi escrever mais parágrafos no prompt (já se tentou). O
+  pertencimento virou VARIÁVEL do sistema, com estado e validação
+  determinística:
+
+      FOTO -> ANÁLISE DA FOTO -> EVIDÊNCIAS -> VALIDAÇÃO DE ESCOPO
+           -> CONSOLIDAÇÃO -> LAUDO -> CONFERÊNCIA -> VALIDAÇÃO HUMANA
+
+  O que o MODELO faz: olha a foto, diz o que vê, classifica a foto (valid /
+  partial / out_of_scope) e dá DUAS confianças por evidência — "está claro na
+  imagem?" e "é deste cômodo?". Elas são independentes de propósito: uma
+  parede de corredor pode estar nitidíssima na foto da cozinha (percepção 99,
+  escopo 10).
+
+  O que o CÓDIGO faz (`core/evidencias.validar_escopo`), sem depender de o
+  modelo ter obedecido a nada:
+  - reflexo e ambiente adjacente são descartados por serem fatos categóricos,
+    não questão de grau — 100% de certeza de que é um reflexo não transforma
+    o reflexo em móvel do cômodo;
+  - abaixo de `PISO_CONFIANCA_ESCOPO` (70) não vira texto;
+  - corroboração entre fotos melhora a PERCEPÇÃO e nunca o pertencimento:
+    uma parede de corredor fotografada de cinco ângulos continua do corredor;
+  - contradição entre fotos NÃO é resolvida por votação (a foto isolada pode
+    ser justamente a certa — foi o caso da parede vermelha em textura
+    projetada da R. Correia de Freitas): vira conflito, com os dois lados
+    preservados e rebaixados, para o vistoriador decidir;
+  - sem evidência aprovada, o cômodo NÃO é escrito. Falso negativo com
+    pendência explicando é melhor que laudo deduzido.
+
+  A redação recebe SÓ as evidências aprovadas, **sem as fotos**. Com as
+  imagens na mão o modelo volta a descrever o que vê, inclusive o que acabou
+  de ser descartado; sem elas, o filtro deixa de ser um pedido no prompt e
+  vira propriedade do que chega até ele.
+
+  Nada disso apaga foto (ela continua no disco e no banco, com o motivo) nem
+  entra sozinho no laudo: conflito de escopo vira pendência `scope_conflict`.
+
+  Custo: cada foto continua sendo enviada UMA vez (o Gemini cobra por imagem).
+  O acréscimo é um prompt repetido por lote de 10 fotos, mais uma chamada de
+  texto puro. Fica desligado por padrão no CLI (`--evidencias` liga) até o
+  vistoriador rodar os dois motores no mesmo imóvel e comparar; na web é o
+  padrão da tela.
+
+- **Rastreabilidade (desde 25/09/2026):** no banco, `Foto -> Evidencia ->
+  ItemLaudo -> Pendencia`. A pendência aponta para o item por ID, não pelo
+  texto — no arquivo `.txt` ela era localizada procurando o texto exato e
+  sumia assim que alguém reescrevia a linha.
+
+- **Regras em produção vivem no banco**, não no repositório: várias
+  instalações não podem escrever umas por cima das outras, e o repositório é
+  público. O `regras_validadas.txt` continua sendo o conjunto INICIAL,
+  semeado na primeira subida. Regra nova só vale por adoção explícita —
+  nunca porque "o sistema aprendeu".
+
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a
