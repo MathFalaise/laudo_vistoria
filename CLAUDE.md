@@ -7,12 +7,28 @@ grava o resultado em arquivos `.txt`.
 
 ## Uso
 
+Duas frentes, **um motor só** (`core/`). O que sai de laudo é igual nas duas.
+
+**Aplicação web** (desde 25/09/2026) — navegador, celular, qualquer sistema:
+
 ```bash
-python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
+docker compose up -d        # http://localhost:8000
+```
+
+Ver `docs/instalacao.md`, `docs/producao.md` e `docs/backup.md`.
+
+**Linha de comando** — continua funcionando, sem alteração:
+
+```bash
+python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências (clássico)
 python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
+python main.py "C:\caminho" --evidencias       # motor V2 (escopo, fronteira, cobertura)
+python main.py "C:\caminho" --evidencias-v1    # motor V1, mantido para comparação
 python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
 python conferir.py "C:\caminho\para\o\imovel"  # confere as fotos contra o laudo
 python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
+python benchmark.py "C:\caminho" --motores classico evidencias_v2   # A/B
+python -m pytest                              # 277 testes, nenhum chama a API
 ```
 
 O `main.py` já roda a conferência no fim (desligue com `--sem-conferencia`);
@@ -28,6 +44,24 @@ houver pendência aberta (a não ser com `--ignorar-pendencias`).
 Requer a variável de ambiente `GEMINI_API_KEY` definida antes de rodar
 (gerada em https://aistudio.google.com/apikey, num projeto com
 faturamento ativo — ver "Decisões importantes").
+
+## Onde fica cada coisa
+
+```
+core/          MOTOR. Regra de laudo mora só aqui — CLI e web chamam isto.
+  evidencias.py  escopo e validação determinística (o que pertence ao cômodo)
+  pipeline.py    orquestração: fotos -> evidências -> escopo -> laudo
+  style_guide.py, report_writer.py, gemini_client.py, validacao.py, ...
+backend/       API FastAPI + SQLite. Traduz entre o motor e o banco.
+frontend/      React + TypeScript + Vite. Responsivo, celular primeiro.
+tests/         178 testes. Nenhum chama o Gemini.
+*.py (raiz)    CLI + aliases de compatibilidade para core/
+```
+
+Os módulos na raiz com nome de módulo do motor (`config.py`,
+`report_writer.py`, ...) são **aliases do mesmo objeto de módulo** que está em
+`core/`, não cópias. Foi assim que o CLI continuou funcionando sem
+alteração, e é o que garante que não existam duas versões da mesma regra.
 
 ## Arquitetura
 
@@ -197,6 +231,127 @@ faturamento ativo — ver "Decisões importantes").
   descartada, assim como a que se justifica com "o inventário não menciona"
   (`_ARGUMENTO_DE_AUSENCIA`). Sem elas, ela propôs apagar a trinca e o
   estufamento que o vistoriador tinha confirmado em campo.
+- **Evidências e escopo (desde 25/09/2026):** o problema que motivou a
+  evolução arquitetural. Uma foto guardada na pasta "Cozinha" NÃO prova que o
+  que aparece nela é da cozinha: o fotógrafo enquadra a porta e pela porta se
+  vê o corredor, o espelho do banheiro reflete o quarto, a última foto do
+  quarto pega meia parede da sala. O motor antigo transformava tudo isso em
+  afirmação sobre o cômodo — e laudo é documento assinado.
+
+  A correção NÃO foi escrever mais parágrafos no prompt (já se tentou). O
+  pertencimento virou VARIÁVEL do sistema, com estado e validação
+  determinística:
+
+      FOTO -> ANÁLISE DA FOTO -> EVIDÊNCIAS -> VALIDAÇÃO DE ESCOPO
+           -> CONSOLIDAÇÃO -> LAUDO -> CONFERÊNCIA -> VALIDAÇÃO HUMANA
+
+  O que o MODELO faz: olha a foto, diz o que vê, classifica a foto (valid /
+  partial / out_of_scope) e dá DUAS confianças por evidência — "está claro na
+  imagem?" e "é deste cômodo?". Elas são independentes de propósito: uma
+  parede de corredor pode estar nitidíssima na foto da cozinha (percepção 99,
+  escopo 10).
+
+  O que o CÓDIGO faz (`core/evidencias.validar_escopo`), sem depender de o
+  modelo ter obedecido a nada:
+  - reflexo e ambiente adjacente são descartados por serem fatos categóricos,
+    não questão de grau — 100% de certeza de que é um reflexo não transforma
+    o reflexo em móvel do cômodo;
+  - abaixo de `PISO_CONFIANCA_ESCOPO` (70) não vira texto;
+  - corroboração entre fotos melhora a PERCEPÇÃO e nunca o pertencimento:
+    uma parede de corredor fotografada de cinco ângulos continua do corredor;
+  - contradição entre fotos NÃO é resolvida por votação (a foto isolada pode
+    ser justamente a certa — foi o caso da parede vermelha em textura
+    projetada da R. Correia de Freitas): vira conflito, com os dois lados
+    preservados e rebaixados, para o vistoriador decidir;
+  - sem evidência aprovada, o cômodo NÃO é escrito. Falso negativo com
+    pendência explicando é melhor que laudo deduzido.
+
+  A redação recebe SÓ as evidências aprovadas, **sem as fotos**. Com as
+  imagens na mão o modelo volta a descrever o que vê, inclusive o que acabou
+  de ser descartado; sem elas, o filtro deixa de ser um pedido no prompt e
+  vira propriedade do que chega até ele.
+
+  Nada disso apaga foto (ela continua no disco e no banco, com o motivo) nem
+  entra sozinho no laudo: conflito de escopo vira pendência `scope_conflict`.
+
+  Custo: cada foto continua sendo enviada UMA vez (o Gemini cobra por imagem).
+  O acréscimo é um prompt repetido por lote de 10 fotos, mais uma chamada de
+  texto puro. Fica desligado por padrão no CLI (`--evidencias` liga) até o
+  vistoriador rodar os dois motores no mesmo imóvel e comparar; na web é o
+  padrão da tela.
+
+- **Motor de evidências V2 (desde 25/09/2026):** a V1 foi a benchmark com
+  107 fotos reais (BWC Suíte + Quarto Suíte) e o resultado decidiu o resto.
+  Ela acertou mais FATOS que o clássico — achou um ar-condicionado split
+  inteiro que ele perdeu, corrigiu a bacia sanitária (o clássico escreveu
+  "com caixa acoplada" numa bacia de válvula de parede), pegou a porta
+  almofadada, as dobradiças douradas e a banheira de hidromassagem, e
+  descartou o reflexo que teria criado um terceiro criado-mudo. E entregou um
+  laudo pior em três pontos, que a V2 corrige POR CÓDIGO:
+
+  1. **Elemento de fronteira.** Soleira, peitoril, batente, vistas, esquadria
+     e porta-janela ficam entre dois ambientes por natureza, e o modelo as
+     lia como "ambiente adjacente" justamente porque mostram o outro lado. O
+     laudo perdeu a soleira do BWC e a categoria Janela inteira do Quarto.
+     Agora existe `Escopo.FRONTEIRA` e o código PROMOVE o que o modelo
+     rebaixou (`core/taxonomia.e_elemento_de_fronteira`). A peça é do cômodo;
+     o cenário visto através dela não é — e quem decide qual dos dois a frase
+     descreve é quem vem primeiro no texto.
+  2. **Categoria.** O modelo propõe, o código decide
+     (`core/taxonomia.categoria_canonica`): soleira → Porta mesmo dividindo
+     dois pisos, peitoril → Janela, box → Mobília mesmo tendo folhas de
+     correr, porta-papel/ganchos/toalheiro → Mobília. A V1 mandou o box para
+     Porta e a soleira para Piso porque acreditou no modelo.
+  3. **Cobertura.** Porta-papel, ganchos e toalheiro sumiram na consolidação
+     sem que nada reclamasse. `core/cobertura.py` pergunta, por tipo de
+     cômodo, se há evidência para cada tipo esperado; o que faltar vira busca
+     DIRIGIDA nas mesmas fotos (máx. 3 por cômodo) e, se ainda faltar,
+     pendência. A saída é sempre dúvida, nunca "o item não existe".
+
+  Mais dois acertos determinísticos: contradição passou a ser por ATRIBUTO
+  (cerâmica branca + rejunte cinza são campos diferentes da mesma parede,
+  não versões concorrentes), e o rodapé ganhou três estados — no BWC o
+  azulejo desce até o piso e NÃO há rodapé, mas os dois motores escreviam
+  "com rodapé em cerâmica branca".
+
+  Componentes elétricos têm regra própria: o que importa é nomear os TIPOS e
+  a composição, não contar unidades. Contagem de placa quase sempre sai
+  errada e deixa a frase pior; a contagem interna continua guardada.
+
+- **A V2 reprovou no primeiro teste real, e isso está registrado de
+  propósito.** A primeira versão gerou 220 pendências no BWC e 365 no Quarto.
+  Duas causas: a detecção de contradição comparava par a par e emitia um
+  conflito POR PAR (40 evidências de parede = 780 pares), e o inventário
+  exaustivo gera uma evidência por FOTO, que o redator lia como um objeto —
+  o mesmo chuveiro em duas fotos virou "dois chuveiros", um split em três
+  fotos virou "três aparelhos". Depois de agregar conflito por
+  (categoria, atributo) e agrupar evidências do mesmo objeto
+  (`core/evidencias.agrupar_objetos`), caiu para 26 e 22.
+
+  O agrupamento exige que o SUBSTANTIVO-NÚCLEO bata: material e cor são
+  boilerplate de laudo, e com eles no critério "porta-papel em metal
+  cromado" e "chuveiro em metal cromado" viravam o mesmo objeto — o que
+  sumiria com um item, erro pior que contar duas vezes.
+
+- **Os três motores convivem, e isso não é indecisão.** `--classico` é o que
+  gerou todas as vistorias reais; `--evidencias-v1` fica para comparação;
+  `--evidencias` é a V2, padrão na web. A V2 custa cerca de 3x o clássico
+  (medido: ~US$ 0,10 contra ~US$ 0,035 nas 107 fotos), detalha menos mobília
+  planejada e ainda gera pendência demais. Ela NÃO substitui o clássico
+  enquanto o `benchmark.py` não provar isso em mais imóveis — de preferência
+  com cozinha e área de serviço, onde ela está mais fraca.
+
+- **Rastreabilidade (desde 25/09/2026):** no banco, `Foto -> Evidencia ->
+  ItemLaudo -> Pendencia`. A pendência aponta para o item por ID, não pelo
+  texto — no arquivo `.txt` ela era localizada procurando o texto exato e
+  sumia assim que alguém reescrevia a linha.
+
+- **Regras em produção vivem no banco**, não no repositório: várias
+  instalações não podem escrever umas por cima das outras, e o repositório é
+  público. O `regras_validadas.txt` continua sendo o conjunto INICIAL,
+  semeado na primeira subida. Regra nova só vale por adoção explícita —
+  nunca porque "o sistema aprendeu".
+
 - Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
   Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
   CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a
