@@ -63,6 +63,26 @@ ARQUIVO_REGRAS_VALIDADAS = os.environ.get(
     "LAUDO_ARQUIVO_REGRAS", os.path.join(RAIZ_PROJETO, "regras_validadas.txt")
 )
 
+# MOTOR DE EVIDÊNCIAS (desde 25/09/2026) — ver core/pipeline.py e
+# core/evidencias.py. Quando ligado, as fotos não viram laudo direto: viram
+# evidências, cada uma com uma confiança de PERTENCIMENTO ao cômodo, e só o
+# que passa pela validação de escopo chega a quem escreve o texto. É o que
+# impede a parede do corredor, vista pela porta da cozinha, de virar parede
+# da cozinha.
+#
+# Fica desligado por padrão até o vistoriador rodar os dois motores no mesmo
+# imóvel e comparar: o caminho novo muda o texto que sai, e o antigo é o que
+# gerou todas as vistorias reais até 24/09/2026. Ligue com a variável de
+# ambiente LAUDO_MOTOR_EVIDENCIAS=1 ou com `python main.py ... --evidencias`.
+USAR_MOTOR_DE_EVIDENCIAS = os.environ.get("LAUDO_MOTOR_EVIDENCIAS", "") == "1"
+
+# Quantas fotos vão em cada chamada da análise de escopo. Não é economia de
+# imagem — cada foto é enviada uma vez só de qualquer forma, e o Gemini cobra
+# por imagem. O lote existe porque a lista de evidências de um cômodo inteiro
+# não cabe em max_output_tokens, e porque o modelo julga escopo melhor quando
+# olha um punhado de fotos por vez do que quando recebe sessenta.
+FOTOS_POR_LOTE_ESCOPO = 10
+
 # Extensões de imagem aceitas dentro das pastas de cômodo
 EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")
 

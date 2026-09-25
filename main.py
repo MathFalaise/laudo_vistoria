@@ -9,13 +9,20 @@ Uso:
 """
 
 import argparse
+import json
 import os
 
-from config import LIMIAR_CERTEZA, ROTULOS_CATEGORIA
+from config import LIMIAR_CERTEZA, ROTULOS_CATEGORIA, USAR_MOTOR_DE_EVIDENCIAS
 from gemini_client import criar_cliente
-from room_processor import processar_comodo
+from core.pipeline import conflitos_para_pendencias, processar_comodo
 from report_writer import parsear_txt_comodo, salvar_txt_comodo, salvar_relatorio_completo
 from validacao import ler_pendencias, salvar_pendencias
+
+# Onde o grafo de evidências de um cômodo fica gravado, ao lado do laudo.
+# O .txt do laudo NÃO muda de formato (regra 33 do pedido); este arquivo é o
+# rastro — foto -> evidência -> item — para auditoria e para a importação da
+# vistoria no sistema web.
+NOME_ARQUIVO_EVIDENCIAS = "_evidencias.json"
 
 
 def listar_pastas_comodo(pasta_imovel: str) -> list:
@@ -65,6 +72,25 @@ def main():
             "pendências que já têm."
         ),
     )
+    # Os dois motores convivem de propósito, até o vistoriador rodar os dois
+    # no mesmo imóvel e comparar — ver core/pipeline.py.
+    motor = parser.add_mutually_exclusive_group()
+    motor.add_argument(
+        "--evidencias",
+        action="store_true",
+        help=(
+            "Usa o motor de EVIDÊNCIAS: cada foto é primeiro classificada "
+            "(é deste cômodo? é reflexo? mostra ambiente vizinho?) e só o que "
+            "passa na validação de escopo vira texto do laudo. Evita que uma "
+            "parede de outro cômodo, vista pela porta, entre como parede "
+            "deste. Custa um prompt a mais por lote de 10 fotos."
+        ),
+    )
+    motor.add_argument(
+        "--classico",
+        action="store_true",
+        help="Força o motor antigo (1 chamada por cômodo, fotos direto para o laudo).",
+    )
     parser.add_argument(
         "--sem-conferencia",
         action="store_true",
@@ -89,6 +115,11 @@ def main():
             return
         nomes_comodo = [nome for nome in todos if nome in args.comodos]
 
+    usar_evidencias = args.evidencias or (USAR_MOTOR_DE_EVIDENCIAS and not args.classico)
+    print("Motor: " + ("evidências (com validação de escopo por foto)"
+                       if usar_evidencias else "clássico (1 chamada por cômodo)"),
+          flush=True)
+
     cliente = criar_cliente()
 
     # Pendências já existentes de cômodos que NÃO forem reprocessados
@@ -98,22 +129,45 @@ def main():
     caminho_pendencias = None
     for nome_comodo in nomes_comodo:
         pasta_comodo = os.path.join(args.pasta_imovel, nome_comodo)
+        print(f"Lendo fotos de: {nome_comodo}...", flush=True)
         try:
-            dados, incertos = processar_comodo(cliente, pasta_comodo, nome_comodo, args.notas)
+            resultado = processar_comodo(
+                cliente, pasta_comodo, nome_comodo, args.notas,
+                usar_evidencias=usar_evidencias,
+                progresso=lambda texto: print(f"  {texto}", flush=True),
+            )
         except Exception as erro:
             # Um cômodo problemático não deve derrubar o laudo inteiro dos
             # outros — registra a falha e segue para o próximo cômodo.
             print(f"  ERRO ao processar '{nome_comodo}': {erro}", flush=True)
             falhas.append(nome_comodo)
             continue
+        dados, incertos = resultado.dados, resultado.incertos
         if not dados:
+            print(f"  Nenhuma foto encontrada em {pasta_comodo}, pulando.", flush=True)
             continue
         caminho_txt = salvar_txt_comodo(pasta_comodo, nome_comodo, dados)
         print(f"  Salvo: {caminho_txt}", flush=True)
         if incertos:
             print(f"  {len(incertos)} item(ns) com certeza abaixo de {LIMIAR_CERTEZA}%", flush=True)
+
+        # Rastro de evidências ao lado do laudo, quando o motor novo rodou.
+        if resultado.evidencias:
+            caminho_evidencias = os.path.join(pasta_comodo, NOME_ARQUIVO_EVIDENCIAS)
+            with open(caminho_evidencias, "w", encoding="utf-8") as arquivo:
+                json.dump(resultado.para_dict(), arquivo, ensure_ascii=False, indent=2)
+            descartadas = len(resultado.evidencias) - len(resultado.evidencias_aceitas())
+            print(f"  Evidências: {len(resultado.evidencias_aceitas())} aceita(s), "
+                  f"{descartadas} descartada(s) — {caminho_evidencias}", flush=True)
+
         processados.add(nome_comodo)
         pendencias.extend(dict(item, comodo=nome_comodo) for item in incertos)
+        # Conflito de escopo NÃO entra no laudo: vira pendência para o
+        # vistoriador decidir olhando a foto (regras 18 e 19 do pedido).
+        if resultado.conflitos:
+            conflitos = conflitos_para_pendencias(nome_comodo, resultado.conflitos)
+            pendencias.extend(conflitos)
+            print(f"  {len(conflitos)} conflito(s) de escopo para você decidir", flush=True)
         # Grava a cada cômodo, não só no fim: se o processo cair ou for
         # interrompido no meio, as pendências já feitas não se perdem.
         anteriores = [p for p in iniciais if p.get("comodo") not in processados]

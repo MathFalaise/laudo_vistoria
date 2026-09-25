@@ -24,9 +24,13 @@ from core.report_writer import (
     normalizar_linha,
     texto_vazio_da_categoria,
 )
+from core.evidencias import (AnaliseFoto, EscopoFoto, analise_de_dict,
+                             evidencia_de_dict)
 from core.style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
+                         montar_prompt_consolidacao_evidencias,
                          montar_prompt_correcao, montar_prompt_divergencias,
-                         montar_prompt_inventario, montar_prompt_revisao)
+                         montar_prompt_escopo, montar_prompt_inventario,
+                         montar_prompt_revisao)
 
 # Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
 # sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
@@ -722,3 +726,199 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
                 texto = "\n".join(linha for linha, _, _ in registros)
             revisado[nome_comodo][categoria] = texto
     return revisado
+
+
+# ==========================================================================
+# ESCOPO E EVIDÊNCIAS (desde 25/09/2026)
+#
+# Duas funções novas, que juntas substituem o caminho de UMA chamada
+# "fotos -> laudo" por "fotos -> evidências" + "evidências -> laudo".
+#
+# Sobre custo, que foi condição explícita do vistoriador: o Gemini cobra por
+# IMAGEM (1.101 tokens por foto, medido em 22/09/2026, igual em qualquer
+# resolução). As fotos continuam sendo enviadas UMA vez cada — mandá-las em
+# 4 lotes de 10 custa o mesmo que num lote de 40, porque o que se repete é só
+# o texto do prompt. O passo 2 é texto puro, sem imagem. O acréscimo real
+# sobre o motor antigo é da ordem de um prompt repetido por lote, não de uma
+# segunda leitura das fotos.
+# ==========================================================================
+
+
+def _schema_escopo_evidencias(quantidade_fotos: int) -> types.Schema:
+    """Schema do passo 1: uma classificação por foto + as evidências cruas.
+
+    "regiao" fica FORA de `required` de propósito: a instrução manda o modelo
+    omitir o campo quando não souber onde está o item, e um schema que exige
+    região obriga o modelo a inventar uma (ver regra 9 do pedido)."""
+    foto = types.Schema(
+        type="OBJECT",
+        properties={
+            "indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "escopo": types.Schema(type="STRING", enum=["valid", "partial", "out_of_scope"]),
+            "relevancia": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
+            "reflexo": types.Schema(type="BOOLEAN"),
+            "motivo": types.Schema(type="STRING"),
+        },
+        required=["indice", "escopo", "relevancia", "ambiente_adjacente", "reflexo", "motivo"],
+        property_ordering=["indice", "escopo", "relevancia", "ambiente_adjacente",
+                           "reflexo", "motivo"],
+    )
+    regiao = types.Schema(
+        type="OBJECT",
+        properties={
+            "x": types.Schema(type="NUMBER"),
+            "y": types.Schema(type="NUMBER"),
+            "largura": types.Schema(type="NUMBER"),
+            "altura": types.Schema(type="NUMBER"),
+        },
+    )
+    evidencia = types.Schema(
+        type="OBJECT",
+        properties={
+            "foto_indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
+            "observacao": types.Schema(type="STRING"),
+            # A ordem importa: o modelo descreve, depois julga se pertence ao
+            # cômodo, e só então dá as notas. Mesma razão da ordem
+            # texto -> motivo -> certeza no schema da análise antiga.
+            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
+            "reflexo": types.Schema(type="BOOLEAN"),
+            "confianca_percepcao": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "confianca_escopo": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "regiao": regiao,
+        },
+        required=["foto_indice", "categoria", "observacao", "ambiente_adjacente",
+                  "reflexo", "confianca_percepcao", "confianca_escopo"],
+        property_ordering=["foto_indice", "categoria", "observacao",
+                           "ambiente_adjacente", "reflexo", "confianca_percepcao",
+                           "confianca_escopo", "regiao"],
+    )
+    return types.Schema(
+        type="OBJECT",
+        properties={
+            "fotos": types.Schema(type="ARRAY", items=foto, min_items=1),
+            "evidencias": types.Schema(type="ARRAY", items=evidencia),
+        },
+        required=["fotos", "evidencias"],
+    )
+
+
+def analisar_escopo_e_evidencias(
+    cliente: genai.Client,
+    blocos_imagem: list,
+    ids_fotos: list,
+    nome_comodo: str,
+    notas_extras: str = "",
+) -> tuple:
+    """Passo 1: classifica cada foto e extrai evidências cruas.
+
+    `blocos_imagem` e `ids_fotos` são paralelos: a foto na posição i do lote é
+    `ids_fotos[i]`. O modelo devolve índices de 1 a N; a tradução de índice
+    para id estável acontece aqui, e índice fora da faixa é ignorado em vez de
+    virar evidência órfã.
+
+    Devolve ({foto_id: AnaliseFoto}, [Evidencia]) — ainda SEM validação de
+    escopo, que é determinística e mora em core.evidencias.validar_escopo."""
+    quantidade = len(blocos_imagem)
+    bruto = _gerar_com_retry(
+        cliente,
+        list(blocos_imagem) + [montar_prompt_escopo(nome_comodo, quantidade, notas_extras)],
+        response_schema=_schema_escopo_evidencias(quantidade),
+        max_output_tokens=16384,
+        descricao_erro=f"a análise de escopo de '{nome_comodo}'",
+    )
+    dados = _extrair_json(bruto)
+
+    analises = {}
+    for item in dados.get("fotos", []):
+        if not isinstance(item, dict):
+            continue
+        indice = item.get("indice")
+        if not isinstance(indice, int) or not (1 <= indice <= quantidade):
+            continue
+        foto_id = ids_fotos[indice - 1]
+        analises[foto_id] = analise_de_dict(item, foto_id, nome_comodo)
+
+    # Foto que o modelo não classificou não vira foto válida por omissão: sem
+    # análise, a evidência dela cai em FOTO_FORA_DE_ESCOPO na validação. É a
+    # regra 16 (falso positivo é pior que falso negativo) aplicada à falha.
+    for posicao, foto_id in enumerate(ids_fotos, start=1):
+        if foto_id not in analises:
+            analises[foto_id] = AnaliseFoto(
+                foto_id=foto_id, comodo_alvo=nome_comodo,
+                escopo=EscopoFoto.FORA_DE_ESCOPO,
+                motivo=f"o modelo não classificou a foto {posicao} deste lote",
+            )
+
+    evidencias = []
+    for ordem, item in enumerate(dados.get("evidencias", []), start=1):
+        if not isinstance(item, dict):
+            continue
+        indice = item.get("foto_indice")
+        if not isinstance(indice, int) or not (1 <= indice <= quantidade):
+            continue
+        foto_id = ids_fotos[indice - 1]
+        evidencias.append(
+            evidencia_de_dict(item, f"{foto_id}#{ordem}", foto_id)
+        )
+    return analises, evidencias
+
+
+def consolidar_evidencias(
+    cliente: genai.Client,
+    nome_comodo: str,
+    resultado_escopo,
+    blocos_imagem: list,
+    notas_extras: str = "",
+) -> tuple:
+    """Passo 2: escreve o laudo do cômodo a partir das evidências APROVADAS.
+
+    Chamada de texto puro — as fotos não vão junto, de propósito: com as
+    imagens na mão o modelo volta a descrever o que vê, inclusive o que o
+    código acabou de descartar por ser de ambiente vizinho.
+
+    Depois da redação, o texto passa EXATAMENTE pelas mesmas travas do motor
+    antigo, na mesma ordem: consolidação de itens repetidos, segunda olhada
+    nos itens de certeza baixa (esta sim com as fotos, que é o ponto dela) e
+    _montar_categoria, que limpa testes indevidos e separa as pendências.
+
+    Devolve (dados, incertos), no mesmo formato de analisar_comodo."""
+    prompt = montar_prompt_consolidacao_evidencias(
+        nome_comodo, CATEGORIAS, resultado_escopo.por_categoria(),
+        resultado_escopo.cobertura_incompleta, notas_extras,
+    )
+    bruto = _gerar_com_retry(
+        cliente,
+        [prompt],
+        response_schema=_schema_itens_com_certeza(CATEGORIAS),
+        max_output_tokens=8192,
+        descricao_erro=f"a redação do cômodo '{nome_comodo}'",
+    )
+
+    try:
+        dados = _extrair_json(bruto)
+    except (json.JSONDecodeError, ValueError) as erro:
+        raise RuntimeError(
+            f"Não foi possível interpretar como JSON a redação do cômodo "
+            f"'{nome_comodo}'. Erro: {erro}\n\nInício da resposta recebida:\n"
+            f"{_trecho_para_erro(bruto)}"
+        ) from erro
+
+    registros_por_categoria = {
+        categoria: _consolidar_repetidos(cliente, categoria, _registros(dados.get(categoria)))
+        for categoria in CATEGORIAS
+    }
+    if blocos_imagem:
+        registros_por_categoria = _corrigir_itens_incertos(
+            cliente, blocos_imagem, nome_comodo, registros_por_categoria, notas_extras
+        )
+
+    resultado, incertos = {}, []
+    for categoria in CATEGORIAS:
+        texto, incertos_categoria = _montar_categoria(
+            categoria, registros_por_categoria[categoria]
+        )
+        resultado[categoria] = texto
+        incertos.extend(incertos_categoria)
+    return resultado, incertos
