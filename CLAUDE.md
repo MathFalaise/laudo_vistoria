@@ -1,9 +1,10 @@
 # laudo_vistoria
 
 Gerador de laudo de vistoria de entrada de imóvel residencial a partir de
-fotos organizadas por cômodo. O Google Gemini (camada paga) descreve cada
-cômodo em 8 categorias — paredes, piso, teto, porta, janela, eletrico,
-mobilia, obs — e o resultado sai em `.txt`, em português.
+fotos organizadas por cômodo. Um modelo multimodal descreve cada cômodo em 8
+categorias — paredes, piso, teto, porta, janela, eletrico, mobilia, obs — e o
+resultado sai em `.txt`, em português. O padrão é o Google Gemini (camada
+paga); GLM e Claude entram por configuração (ver "Multimodelo").
 
 ## Uso
 
@@ -20,7 +21,9 @@ python validar.py "C:\caminho"     # aplica as decisões do Pendencias_Validacao
 python conferir.py "C:\caminho"    # conferência avulsa, para laudo antigo
 python revisar.py "C:\caminho"     # repadroniza o texto; recusa se houver pendência aberta
 python benchmark.py "C:\caminho" --motores classico evidencias_v2   # A/B
-python -m pytest                   # 278 testes, nenhum chama a API
+python main.py "C:\caminho" --evidencias --provedor glm --validador claude
+python benchmark.py "C:\caminho" --provedores gemini glm glm+claude  # A/B de provedor
+python -m pytest                   # 344 testes, nenhum chama a API
 ```
 
 - A pasta do imóvel tem uma subpasta por cômodo, com as fotos dele
@@ -36,7 +39,11 @@ python -m pytest                   # 278 testes, nenhum chama a API
   força). Ordem: `main.py` → `validar.py` → `revisar.py`.
 - `LAUDO_MOTOR_EVIDENCIAS=1` troca o padrão do CLI para a V2; `--classico` força
   o clássico.
-- Exige `GEMINI_API_KEY` (aistudio.google.com/apikey, projeto com faturamento).
+- Exige a chave do provedor em uso: `GEMINI_API_KEY` no padrão
+  (aistudio.google.com/apikey, projeto com faturamento); `GLM_API_KEY`,
+  `CLAUDE_API_KEY` e `CLAUDE_MODEL` para os outros (ver `.env.example`).
+- No fim, `main.py` grava `Telemetria_Modelos.json` na raiz do imóvel:
+  chamadas, tokens e custo, sem prompt nem imagem.
 
 **Aplicação web** (desde 25/09/2026): `docker compose up -d`, depois
 http://localhost:8000. Ver `docs/instalacao.md`, `docs/producao.md`,
@@ -48,10 +55,14 @@ antes de confiar neles.
 
 ```
 core/                MOTOR. Regra de laudo mora só aqui; CLI e web chamam isto.
-  config.py          modelo, limiares, categorias e rótulos
+  config.py          modelo, limiares, categorias, preços por modelo
   style_guide.py     TODO o jeito de escrever: REGRAS_GERAIS, exemplos, prompts
-  gemini_client.py   chamadas ao Gemini, segunda olhada, conferência
-  image_utils.py     fotos -> types.Part; mosaicos da conferência
+  gemini_client.py   todas as chamadas a modelo (nome histórico): análise,
+                     evidências, segunda olhada, redação, conferência
+  providers/         Gemini, GLM e Claude atrás de um contrato só
+  validacao_visual.py  validação visual seletiva + reanálise dirigida (V2)
+  telemetria.py      uma linha por chamada: tokens, tempo, custo
+  image_utils.py     fotos -> Imagem neutra; mosaicos da conferência
   room_processor.py  processa um cômodo (motor clássico)
   pipeline.py        escolhe o motor e orquestra fotos -> evidências -> laudo
   evidencias.py      validação de escopo, agrupamento de objetos, conflitos
@@ -61,7 +72,7 @@ core/                MOTOR. Regra de laudo mora só aqui; CLI e web chamam isto.
   validacao.py       formato e aplicação do Pendencias_Validacao.txt
 backend/app/         FastAPI + SQLAlchemy + SQLite (Alembic). Motor <-> banco.
 frontend/src/        React + TypeScript + Vite, celular primeiro.
-tests/               278 testes.
+tests/               344 testes (+3 de integração com API real, desligados).
 main.py, validar.py, conferir.py, revisar.py, benchmark.py    CLI
 config.py, style_guide.py, gemini_client.py, ... (raiz)       aliases
 regras_validadas.txt regras de redação adotadas (conjunto inicial)
@@ -71,17 +82,19 @@ Os módulos da raiz com nome de módulo do motor **não são cópias**: fazem
 `sys.modules[__name__] = core.<modulo>`, então são o mesmo objeto. Edite
 sempre em `core/`.
 
-Só dois arquivos conhecem o SDK do Gemini: `image_utils.py` (monta
-`types.Part`) e `gemini_client.py` (chama `generate_content`). Trocar de
-provedor mexe só neles.
+Só `core/providers/` conhece SDK ou HTTP de modelo. O resto do motor manda
+partes (texto e `Imagem`), um schema NEUTRO (`providers/esquema.py`) e um teto
+de saída, e recebe texto JSON. Todas as chamadas passam por
+`gemini_client._gerar_com_retry`. Provedor novo = um arquivo em `providers/`.
 
 ## Regras que não se quebram
 
 Cada uma tem o porquê em "Decisões", abaixo.
 
-1. **Camada paga do Gemini, sempre.** A gratuita permite ao Google usar o
-   conteúdo com revisão humana, e isto envia fotos de interior de casa de
-   cliente (LGPD).
+1. **Foto de cliente só vai a provedor pago, que não treina com os dados.**
+   Gemini na camada paga (a gratuita permite ao Google usar o conteúdo com
+   revisão humana); GLM e Claude só depois de o vistoriador conferir a política
+   de dados do provedor (LGPD). Por isso o padrão continua Gemini.
 2. **Limiar fica no código, nunca no prompt.** Modelo que sabe o corte
    responde logo acima dele.
 3. **Nada entra sozinho no laudo.** Conferência, cobertura e conflito de escopo
@@ -99,6 +112,10 @@ Cada uma tem o porquê em "Decisões", abaixo.
    redação, nunca endereço, cliente ou fato de um imóvel. Fato de imóvel ("a
    cozinha não tem porta") se resolve com CORRIGIR/REMOVER ou `--notas` —
    como regra, o modelo passaria a achar que nenhuma cozinha tem porta.
+9. **O validador não escreve e não ressuscita.** O validador visual só
+   confirma, corrige ou tira evidência que o código ACEITOU; o veto é aplicado
+   por `validar_escopo`, depois de todas as regras. Conflito entre fotos não
+   vai ao validador (não é votação), e falha de validação nunca vira aprovação.
 
 ## Revisão antes de entregar um laudo
 
@@ -287,6 +304,48 @@ padrão na web. A V2 custa ~3× (US$ 0,10 contra 0,035 nas 107 fotos),
 detalha menos mobília planejada e ainda gera pendência demais. Não substitui
 o clássico enquanto o `benchmark.py` não provar em mais imóveis — de
 preferência com cozinha e área de serviço, onde ela é mais fraca.
+
+**Multimodelo (05/10/2026)** — GLM como analista barato, Claude como
+auditor visual seletivo, sem tirar o Gemini. Grafo da V2 com validador:
+
+    FOTOS -> ANÁLISE (analista) -> ESCOPO (código) -> BUSCA DIRIGIDA
+          -> POLÍTICA (código) -> VALIDAÇÃO (validador, com a foto)
+          -> REANÁLISE (analista, só o ponto em dúvida) -> VALIDAÇÃO
+          -> ESCOPO de novo (código) -> COBERTURA -> REDAÇÃO -> LAUDO
+
+- **Padrão inalterado**: Gemini, validador desligado. Nada do caminho antigo
+  muda sem `VISION_PROVIDER`/`VALIDATION_ENABLED`. Teste prova, schema a
+  schema, que o pedido ao Gemini é o mesmo objeto de antes da abstração.
+- **GLM-5.3-Flash pelo OpenCode Zen**, HTTP compatível com OpenAI. Conferido
+  na documentação oficial em 05/10/2026: endpoint `opencode.ai/zen/v1`,
+  `Bearer`, US$ 0,15/0,50 por milhão, retenção zero (exceto modelos
+  gratuitos); o models.dev o registra como multimodal. **Não documentado:**
+  que o Zen repassa a imagem e aceita JSON Schema. Só
+  `INTEGRATION_TESTS=1 pytest tests/test_integracao_provedores.py` prova; se
+  o schema for recusado, `GLM_FORMATO_RESPOSTA=json_object`.
+- **Claude via HTTP**, saída estruturada por ferramenta forçada; sem SDK (não
+  traria vantagem). O modelo vem de `CLAUDE_MODEL`, nunca fixo no código.
+- **O validador recebe a FOTO**, não só o texto do analista: lendo o texto, o
+  modelo concorda com o texto (a lição da conferência, 22/09/2026).
+- **Política no código** (`config.py`): confiança final < 85, fronteira
+  promovida, defeito/OBS e tudo que a busca dirigida achou (mandado procurar,
+  o modelo tende a "achar"); teto de 30 por cômodo, uma chamada por foto. Fora
+  do teto segue como o escopo decidiu, marcada `nao_validada_limite`.
+- **Correção é aplicada** (precedente: a segunda olhada também troca o texto
+  do item duvidoso), guardando a observação original;
+  `VALIDATION_CORRECTED_POLICY=conflito` manda os dois lados ao vistoriador.
+- **Reanálise atualiza a MESMA evidência** (mesmo id, `revisao` +1), máx. 1.
+  Dúvida que persiste vira `nao_resolvida` e sai do laudo, com pendência.
+- **Resposta fora do contrato não é interpretada** (decisão fora do enum, id
+  repetido, correção sem texto, reanálise sem foco): a evidência fica em
+  estado seguro (`VALIDATION_FAILURE_POLICY`; padrão: não entra sem
+  conferência).
+- **Só V2.** O clássico e a V1 não têm evidência para validar.
+- **Banco: tabelas novas, nenhuma coluna nova** — a subida faz `create_all`,
+  que cria tabela mas não coluna; banco antigo sem migração não quebra.
+- **Nada disso foi testado com API real** até 05/10/2026: custo, qualidade e
+  taxa de reanálise do GLM+Claude são desconhecidos. Antes de trocar o
+  padrão: `benchmark.py --provedores` em imóveis reais.
 
 **Rastreabilidade no banco:** `Foto -> Evidencia -> ItemLaudo -> Pendencia`.
 A pendência aponta o item por ID; no `.txt` ela é achada pelo texto exato e
