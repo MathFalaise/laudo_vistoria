@@ -18,11 +18,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import DIRETORIO_FOTOS
-from app.models import (Comodo, CorrecaoHumana, EstadoComodo, Evidencia,
+from app.models import (ChamadaModelo, Comodo, CorrecaoHumana, EstadoComodo, Evidencia,
                         HistoricoItem, ItemLaudo, Pendencia, Regra,
-                        TipoPendencia, Vistoria, agora)
+                        TipoPendencia, ValidacaoEvidencia, Vistoria, agora)
 from core.config import CATEGORIAS, LIMIAR_CERTEZA, ROTULOS_CATEGORIA
-from core.pipeline import PREFIXO_CONFLITO, processar_comodo
+from core.pipeline import prefixo_do_conflito, processar_comodo
 from core.report_writer import (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES,
                                 montar_texto_comodo, normalizar_linha,
                                 texto_vazio_da_categoria)
@@ -275,7 +275,7 @@ def _gravar_pendencias(sessao: Session, comodo: Comodo, resultado,
             comodo_id=comodo.id,
             categoria=conflito.categoria,
             tipo=TipoPendencia.CONFLITO_ESCOPO,
-            motivo=f"{PREFIXO_CONFLITO}. {conflito.resumo}",
+            motivo=f"{prefixo_do_conflito(conflito)}. {conflito.resumo}",
             certeza=0,
             texto_proposto="",
             # Traduz os ids do motor para os do banco: é o que faz a tela de
@@ -288,12 +288,44 @@ def _gravar_pendencias(sessao: Session, comodo: Comodo, resultado,
     return criadas
 
 
+def _gravar_rastreabilidade(sessao: Session, resultado, ids_do_motor: dict) -> None:
+    """Quem viu cada evidência e o que o validador visual concluiu."""
+    for evidencia in resultado.evidencias:
+        if not (evidencia.origem or evidencia.validacao or evidencia.revisao):
+            continue
+        evidencia_id = ids_do_motor.get(evidencia.id)
+        if evidencia_id is None:
+            continue
+        sessao.add(ValidacaoEvidencia(
+            evidencia_id=evidencia_id, origem=evidencia.origem, revisao=evidencia.revisao,
+            observacao_original=evidencia.observacao_original, decisao=evidencia.validacao,
+            motivo=evidencia.validacao_motivo, validador=evidencia.validacao_por,
+        ))
+
+
+def _gravar_chamadas(sessao: Session, comodo: Comodo, chamadas: list, job_id: str | None) -> None:
+    for chamada in chamadas:
+        contexto = chamada.get("contexto") or {}
+        sessao.add(ChamadaModelo(
+            vistoria_id=comodo.vistoria_id, comodo_id=comodo.id, job_id=job_id,
+            foto_id=contexto.get("foto"), provedor=chamada["provedor"],
+            modelo=chamada["modelo"], tipo=chamada.get("tipo") or "",
+            sucesso=bool(chamada["sucesso"]), erro=chamada.get("erro") or "",
+            duracao_s=float(chamada.get("duracao_s") or 0), tentativas=chamada.get("tentativas") or 1,
+            imagens=chamada.get("imagens") or 0, tokens_entrada=chamada.get("tokens_entrada"),
+            tokens_saida=chamada.get("tokens_saida"), tokens_total=chamada.get("tokens_total"),
+            custo_usd=chamada.get("custo_usd"),
+        ))
+
+
 def processar_comodo_persistindo(
     sessao: Session,
     comodo: Comodo,
     cliente,
     usar_evidencias: bool = True,
     progresso=None,
+    validador=None,
+    job_id: str | None = None,
 ) -> Comodo:
     """Roda um cômodo pelo motor e grava o grafo inteiro.
 
@@ -314,6 +346,7 @@ def processar_comodo_persistindo(
             ids_fotos=ids,
             progresso=progresso,
             caminhos=caminhos,
+            validador=validador if usar_evidencias else None,
         )
     except Exception as erro:
         # Regra 26/isolamento por cômodo: a falha de um não derruba os outros.
@@ -324,6 +357,8 @@ def processar_comodo_persistindo(
 
     por_texto = _gravar_itens(sessao, comodo, resultado.dados)
     ids_do_motor = _gravar_evidencias(sessao, comodo, resultado, por_texto)
+    _gravar_rastreabilidade(sessao, resultado, ids_do_motor)
+    _gravar_chamadas(sessao, comodo, resultado.chamadas, job_id)
     _gravar_pendencias(sessao, comodo, resultado, por_texto, ids_do_motor)
 
     # A classificação de escopo volta para a Foto: a tela de auditoria mostra

@@ -31,7 +31,7 @@ from app import jobs as jobs_mod
 from app import servicos
 from app.config import DIRETORIO_FOTOS, TAMANHO_MAX_ZIP
 from app.db import obter_sessao
-from app.models import (Comodo, EstadoComodo, Evidencia, Foto, ItemLaudo, Job,
+from app.models import (ChamadaModelo, Comodo, EstadoComodo, Evidencia, Foto, ItemLaudo, Job,
                         Pendencia, Regra, Usuario, Vistoria, novo_id)
 from app.config import NOME_COOKIE_SESSAO
 from app.security import (conferir_senha, criar_sessao, encerrar_sessao,
@@ -533,7 +533,34 @@ def _evidencia_para_dict(evidencia: Evidencia) -> dict:
         "motivo_descarte": evidencia.motivo_descarte,
         "detalhe_descarte": evidencia.detalhe_descarte,
         "regiao": evidencia.regiao,
+        # Quem viu e o que o validador visual concluiu (None = sem registro).
+        "validacao": ({
+            "origem": evidencia.validacao.origem, "revisao": evidencia.validacao.revisao,
+            "observacao_original": evidencia.validacao.observacao_original,
+            "decisao": evidencia.validacao.decisao, "motivo": evidencia.validacao.motivo,
+            "validador": evidencia.validacao.validador,
+        } if evidencia.validacao else None),
     }
+
+
+@roteador.get("/vistorias/{vistoria_id}/custos")
+def custos_da_vistoria(vistoria_id: str, sessao: Session = Depends(obter_sessao),
+                       usuario: Usuario = Depends(usuario_atual)):
+    """Quanto a vistoria custou em chamadas a modelo, por provedor e modelo.
+    `custo_usd` None = há chamada de modelo sem preço registrado (ver
+    core.config.PRECOS_POR_MILHAO / LAUDO_PRECOS_MODELOS)."""
+    from core import telemetria
+
+    _achar(sessao, Vistoria, vistoria_id)
+    linhas = sessao.scalars(
+        select(ChamadaModelo).where(ChamadaModelo.vistoria_id == vistoria_id)
+        .order_by(ChamadaModelo.criado_em)
+    ).all()
+    chamadas = [{"provedor": c.provedor, "modelo": c.modelo, "tipo": c.tipo,
+                 "sucesso": c.sucesso, "duracao_s": c.duracao_s, "tentativas": c.tentativas,
+                 "imagens": c.imagens, "tokens_entrada": c.tokens_entrada,
+                 "tokens_saida": c.tokens_saida, "custo_usd": c.custo_usd} for c in linhas]
+    return {"chamadas": len(chamadas), "por_modelo": telemetria.resumir(chamadas)}
 
 
 @roteador.get("/comodos/{comodo_id}/evidencias")

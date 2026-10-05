@@ -1,17 +1,20 @@
 """
-Camada fina sobre a API do Google Gemini: envia as fotos
-de um cômodo + o prompt com as 8 categorias e retorna o texto gerado em JSON.
+As CHAMADAS ao modelo que o motor faz: análise do cômodo, evidências, segunda
+olhada, busca dirigida, redação, conferência, revisão. Cada função monta o
+prompt (de style_guide.py), o schema da resposta e as travas determinísticas
+sobre o que volta.
+
+O nome do arquivo é histórico (até 05/10/2026 só existia o Gemini). Quem
+responde agora é um PROVEDOR (core/providers): Gemini, GLM ou Claude, escolhido
+por VISION_PROVIDER. Nenhuma função daqui conhece o SDK ou o HTTP de nenhum
+deles — `cliente` é um `Provedor` (ou, por compatibilidade, um cliente no
+formato do SDK do Gemini, que vira ProvedorGemini).
 """
 
 import json
 import re
-import time
 
-import httpx
-from google import genai
-from google.genai import errors, types
-
-from core.config import (API_KEY, MODEL_NAME, CATEGORIAS, LIMIAR_CERTEZA,
+from core.config import (CATEGORIAS, LIMIAR_CERTEZA,
                     LIMIAR_CONFERENCIA, LIMIAR_CORRECAO_AUTOMATICA,
                     ROTULOS_CATEGORIA)
 from core.report_writer import (
@@ -34,18 +37,12 @@ from core.style_guide import (montar_prompt_comodo, montar_prompt_consolidacao,
                          montar_prompt_inventario, montar_prompt_revisao,
                          montar_prompt_segunda_olhada_dirigida)
 from core.taxonomia import tipos_eletricos_presentes
-
-# Nº de tentativas e espera entre elas em falha transitória: 503 (servidor
-# sobrecarregado — a própria API pede pra tentar de novo) ou falha de rede,
-# inclusive o tempo limite abaixo estourar.
-MAX_TENTATIVAS = 4
-ESPERA_BASE_SEGUNDOS = 10
-
-# Tempo máximo de espera por UMA chamada. Sem isso, uma conexão que o
-# servidor deixou pendurada trava o script para sempre — aconteceu em
-# 18/09/2026, com o processo parado 10+ minutos esperando resposta. O
-# cômodo mais lento já medido levou ~2 min (51 fotos); 5 min é folga.
-TEMPO_LIMITE_CHAMADA_SEGUNDOS = 300
+from core.providers import Provedor, como_provedor, provedor_de_visao
+from core.providers.esquema import esquema
+# Tentativas, espera e tempo limite moram no provedor Gemini (o mesmo
+# comportamento de sempre); os nomes ficam aqui para quem os importava.
+from core.providers.gemini import (ESPERA_BASE_SEGUNDOS, MAX_TENTATIVAS,  # noqa: F401
+                                   TEMPO_LIMITE_CHAMADA_SEGUNDOS)
 
 SEM_MOTIVO = "(o modelo não explicou)"
 MOTIVO_REPETIDOS = (
@@ -69,17 +66,11 @@ MOTIVO_REANALISADO = (
 )
 
 
-def criar_cliente() -> genai.Client:
-    if not API_KEY:
-        raise RuntimeError(
-            "Defina a variável de ambiente GEMINI_API_KEY antes de rodar o script "
-            "(gere uma em https://aistudio.google.com/apikey, num projeto com "
-            "faturamento ativo — ver CLAUDE.md)."
-        )
-    return genai.Client(
-        api_key=API_KEY,
-        http_options=types.HttpOptions(timeout=TEMPO_LIMITE_CHAMADA_SEGUNDOS * 1000),
-    )
+def criar_cliente() -> Provedor:
+    """O provedor que olha as fotos (VISION_PROVIDER; padrão: gemini).
+
+    O nome ficou: CLI, web e testes chamam `criar_cliente()` desde o começo."""
+    return provedor_de_visao()
 
 
 def _extrair_json(texto: str) -> dict:
@@ -117,41 +108,41 @@ def _trecho_para_erro(texto: str) -> str:
     return f"{texto[:LIMITE_TRECHO_ERRO]}... [+{omitidos} caracteres omitidos]"
 
 
-def _schema_categorias(categorias: list) -> types.Schema:
+def _schema_categorias(categorias: list) -> dict:
     """Monta o response_schema que força o modelo a devolver um objeto
     JSON plano com uma chave string por categoria, evitando que a
     resposta venha embrulhada em lista ou com chaves inesperadas."""
-    return types.Schema(
+    return esquema(
         type="OBJECT",
-        properties={categoria: types.Schema(type="STRING") for categoria in categorias},
+        properties={categoria: esquema(type="STRING") for categoria in categorias},
         required=categorias,
     )
 
 
-def _schema_item_com_certeza() -> types.Schema:
+def _schema_item_com_certeza() -> dict:
     """Um item do laudo como o modelo devolve: texto, motivo e certeza."""
-    return types.Schema(
+    return esquema(
         type="OBJECT",
         properties={
-            "texto": types.Schema(type="STRING"),
-            "motivo": types.Schema(type="STRING"),
-            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "texto": esquema(type="STRING"),
+            "motivo": esquema(type="STRING"),
+            "certeza": esquema(type="INTEGER", minimum=0, maximum=100),
         },
         required=["texto", "motivo", "certeza"],
         property_ordering=["texto", "motivo", "certeza"],
     )
 
 
-def _schema_itens_com_certeza(categorias: list) -> types.Schema:
+def _schema_itens_com_certeza(categorias: list) -> dict:
     """Schema da análise de um cômodo: cada categoria é uma lista de itens
     {texto, motivo, certeza}. A ordem texto -> motivo -> certeza é
     proposital: o modelo escreve o item, diz o que nele é duvidoso e só
     então dá a nota — em vez de se comprometer com um número antes."""
     item = _schema_item_com_certeza()
-    return types.Schema(
+    return esquema(
         type="OBJECT",
         properties={
-            categoria: types.Schema(type="ARRAY", items=item, min_items=1)
+            categoria: esquema(type="ARRAY", items=item, min_items=1)
             for categoria in categorias
         },
         required=categorias,
@@ -187,7 +178,7 @@ def _tem_itens_repetidos(linhas: list) -> bool:
     return any(linha_com_mais_um(linha) for linha in linhas) or bool(grupos_de_itens_repetidos(linhas))
 
 
-def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list) -> list:
+def _consolidar_repetidos(cliente, categoria: str, registros: list) -> list:
     """Conserta uma categoria que violou a regra ITENS REPETIDOS ("Mais
     um/uma", ou o mesmo item em linhas separadas): UMA chamada de texto puro
     (sem fotos — custa uma fração de centavo) que junta os itens repetidos
@@ -202,9 +193,9 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
 
     rotulo = ROTULOS_CATEGORIA[categoria]
     texto = "\n".join(linha for linha, _, _ in registros)
-    schema = types.Schema(
+    schema = esquema(
         type="OBJECT",
-        properties={"linhas": types.Schema(type="ARRAY", items=types.Schema(type="STRING"), min_items=1)},
+        properties={"linhas": esquema(type="ARRAY", items=esquema(type="STRING"), min_items=1)},
         required=["linhas"],
     )
     try:
@@ -214,6 +205,7 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
             response_schema=schema,
             max_output_tokens=4096,
             descricao_erro=f"a correção de itens repetidos ({rotulo})",
+            tipo="repetidos",
         )
         novas = [normalizar_linha(str(linha)) for linha in _extrair_json(bruto).get("linhas", [])]
         novas = [linha for linha in novas if linha]
@@ -231,48 +223,48 @@ def _consolidar_repetidos(cliente: genai.Client, categoria: str, registros: list
     return [(linha, *originais.get(linha, herdada)) for linha in novas]
 
 
-def _schema_inventario() -> types.Schema:
-    item = types.Schema(
+def _schema_inventario() -> dict:
+    item = esquema(
         type="OBJECT",
         properties={
-            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
-            "item": types.Schema(type="STRING"),
-            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "categoria": esquema(type="STRING", enum=list(CATEGORIAS)),
+            "item": esquema(type="STRING"),
+            "certeza": esquema(type="INTEGER", minimum=0, maximum=100),
         },
         required=["categoria", "item", "certeza"],
         property_ordering=["categoria", "item", "certeza"],
     )
-    return types.Schema(
+    return esquema(
         type="OBJECT",
-        properties={"inventario": types.Schema(type="ARRAY", items=item, min_items=1)},
+        properties={"inventario": esquema(type="ARRAY", items=item, min_items=1)},
         required=["inventario"],
     )
 
 
-def _schema_divergencias() -> types.Schema:
-    item = types.Schema(
+def _schema_divergencias() -> dict:
+    item = esquema(
         type="OBJECT",
         properties={
-            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
-            "tipo": types.Schema(type="STRING", enum=["falta", "errado"]),
-            "linha_atual": types.Schema(type="STRING"),
-            "linha_sugerida": types.Schema(type="STRING"),
-            "o_que_vi": types.Schema(type="STRING"),
-            "certeza": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "categoria": esquema(type="STRING", enum=list(CATEGORIAS)),
+            "tipo": esquema(type="STRING", enum=["falta", "errado"]),
+            "linha_atual": esquema(type="STRING"),
+            "linha_sugerida": esquema(type="STRING"),
+            "o_que_vi": esquema(type="STRING"),
+            "certeza": esquema(type="INTEGER", minimum=0, maximum=100),
         },
         required=["categoria", "tipo", "linha_atual", "linha_sugerida", "o_que_vi", "certeza"],
         property_ordering=["categoria", "tipo", "linha_atual", "linha_sugerida",
                            "o_que_vi", "certeza"],
     )
-    return types.Schema(
+    return esquema(
         type="OBJECT",
-        properties={"divergencias": types.Schema(type="ARRAY", items=item)},
+        properties={"divergencias": esquema(type="ARRAY", items=item)},
         required=["divergencias"],
     )
 
 
 def conferir_comodo(
-    cliente: genai.Client,
+    cliente,
     mosaicos: list,
     nome_comodo: str,
     dados: dict,
@@ -309,6 +301,7 @@ def conferir_comodo(
         response_schema=_schema_inventario(),
         max_output_tokens=8192,
         descricao_erro=f"o inventário do cômodo '{nome_comodo}'",
+            tipo="inventario",
     )
     inventario = [
         item for item in _extrair_json(bruto).get("inventario", [])
@@ -324,6 +317,7 @@ def conferir_comodo(
         response_schema=_schema_divergencias(),
         max_output_tokens=8192,
         descricao_erro=f"a comparação do inventário de '{nome_comodo}'",
+            tipo="divergencias",
     )
     divergencias = _extrair_json(bruto).get("divergencias", [])
 
@@ -397,7 +391,7 @@ def conferir_comodo(
 
 
 def _corrigir_itens_incertos(
-    cliente: genai.Client,
+    cliente,
     blocos_imagem: list,
     nome_comodo: str,
     registros_por_categoria: dict,
@@ -430,10 +424,10 @@ def _corrigir_itens_incertos(
         }
         for categoria, indice in alvos
     ]
-    schema = types.Schema(
+    schema = esquema(
         type="OBJECT",
         properties={
-            "itens": types.Schema(
+            "itens": esquema(
                 type="ARRAY", items=_schema_item_com_certeza(), min_items=1
             )
         },
@@ -448,6 +442,7 @@ def _corrigir_itens_incertos(
             response_schema=schema,
             max_output_tokens=4096,
             descricao_erro=f"a segunda olhada nos itens duvidosos de '{nome_comodo}'",
+            tipo="segunda_olhada",
         )
         novos = _extrair_json(bruto).get("itens", [])
     except Exception as erro:
@@ -575,56 +570,26 @@ def pendencias_itens_repetidos(categoria: str, texto: str) -> list:
 
 
 def _gerar_com_retry(
-    cliente: genai.Client,
+    cliente,
     conteudo: list,
-    response_schema: types.Schema,
+    response_schema: dict,
     max_output_tokens: int,
     descricao_erro: str,
+    tipo: str = "",
 ) -> str:
-    """Chama generate_content com retry automático em erro 503 (servidor
-    sobrecarregado — transitório, a própria API pede pra tentar de novo) e
-    verifica se a resposta não foi cortada por max_output_tokens. Devolve o
-    texto bruto (JSON) da resposta. Compartilhado por analisar_comodo e
-    revisar_laudo pra não duplicar a lógica de retry."""
-    resposta = None
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
-        try:
-            resposta = cliente.models.generate_content(
-                model=MODEL_NAME,
-                contents=conteudo,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=max_output_tokens,
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                ),
-            )
-            break
-        except (errors.ServerError, httpx.TransportError) as erro:
-            # TransportError cobre o tempo limite estourado e quedas de rede.
-            if tentativa == MAX_TENTATIVAS:
-                raise
-            espera = ESPERA_BASE_SEGUNDOS * tentativa
-            print(
-                f"  Falha transitória no Gemini para {descricao_erro} "
-                f"({erro.__class__.__name__}), tentativa {tentativa}/{MAX_TENTATIVAS}. "
-                f"Aguardando {espera}s...",
-                flush=True,
-            )
-            time.sleep(espera)
+    """Ponto ÚNICO por onde o motor chama um modelo. Devolve o texto bruto
+    (JSON) da resposta.
 
-    candidato = resposta.candidates[0] if resposta.candidates else None
-    if candidato is not None and candidato.finish_reason == types.FinishReason.MAX_TOKENS:
-        raise RuntimeError(
-            f"A resposta do modelo para {descricao_erro} foi cortada por "
-            "atingir o limite de max_output_tokens antes de terminar o JSON. "
-            "Aumente max_output_tokens em gemini_client.py e tente novamente."
-        )
-
-    return resposta.text
+    Novas tentativas, tempo limite e a recusa de resposta cortada por
+    max_output_tokens são do provedor (core/providers) — no Gemini, exatamente
+    o comportamento que estava aqui até 05/10/2026. `tipo` identifica a
+    chamada na telemetria de custo."""
+    return como_provedor(cliente).gerar_json(
+        conteudo, response_schema, max_output_tokens, descricao_erro, tipo)
 
 
 def analisar_comodo(
-    cliente: genai.Client, blocos_imagem: list, nome_comodo: str, notas_extras: str = ""
+    cliente, blocos_imagem: list, nome_comodo: str, notas_extras: str = ""
 ) -> tuple:
     """Chama a API UMA vez para o cômodo inteiro e retorna (dados, incertos):
 
@@ -649,6 +614,7 @@ def analisar_comodo(
         # teto baixo aqui corta o JSON no meio e quebra o parsing.
         max_output_tokens=8192,
         descricao_erro=f"o cômodo '{nome_comodo}'",
+            tipo="analise",
     )
 
     try:
@@ -676,7 +642,7 @@ def analisar_comodo(
     return resultado, incertos
 
 
-def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "") -> dict:
+def revisar_laudo(cliente, resultados: dict, notas_extras: str = "") -> dict:
     """Passa um laudo JÁ GERADO (todos os cômodos de um imóvel) por uma
     revisão de TEXTO PURO — sem fotos — pra padronizar terminologia e
     formatação conforme o style_guide atual. Usada por revisar.py quando o
@@ -688,7 +654,7 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
     laudo_json = json.dumps(resultados, ensure_ascii=False, indent=2)
     prompt = montar_prompt_revisao(laudo_json, CATEGORIAS, notas_extras)
 
-    schema_laudo = types.Schema(
+    schema_laudo = esquema(
         type="OBJECT",
         properties={
             nome_comodo: _schema_categorias(CATEGORIAS) for nome_comodo in resultados
@@ -704,6 +670,7 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
         # que um cômodo só — precisa de bastante espaço de saída.
         max_output_tokens=32768,
         descricao_erro="a revisão do laudo completo",
+            tipo="revisao",
     )
 
     try:
@@ -747,48 +714,48 @@ def revisar_laudo(cliente: genai.Client, resultados: dict, notas_extras: str = "
 # ==========================================================================
 
 
-def _schema_escopo_evidencias(quantidade_fotos: int) -> types.Schema:
+def _schema_escopo_evidencias(quantidade_fotos: int) -> dict:
     """Schema do passo 1: uma classificação por foto + as evidências cruas.
 
     "regiao" fica FORA de `required` de propósito: a instrução manda o modelo
     omitir o campo quando não souber onde está o item, e um schema que exige
     região obriga o modelo a inventar uma (ver regra 9 do pedido)."""
-    foto = types.Schema(
+    foto = esquema(
         type="OBJECT",
         properties={
-            "indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
-            "escopo": types.Schema(type="STRING", enum=["valid", "partial", "out_of_scope"]),
-            "relevancia": types.Schema(type="INTEGER", minimum=0, maximum=100),
-            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
-            "reflexo": types.Schema(type="BOOLEAN"),
-            "motivo": types.Schema(type="STRING"),
+            "indice": esquema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "escopo": esquema(type="STRING", enum=["valid", "partial", "out_of_scope"]),
+            "relevancia": esquema(type="INTEGER", minimum=0, maximum=100),
+            "ambiente_adjacente": esquema(type="BOOLEAN"),
+            "reflexo": esquema(type="BOOLEAN"),
+            "motivo": esquema(type="STRING"),
         },
         required=["indice", "escopo", "relevancia", "ambiente_adjacente", "reflexo", "motivo"],
         property_ordering=["indice", "escopo", "relevancia", "ambiente_adjacente",
                            "reflexo", "motivo"],
     )
-    regiao = types.Schema(
+    regiao = esquema(
         type="OBJECT",
         properties={
-            "x": types.Schema(type="NUMBER"),
-            "y": types.Schema(type="NUMBER"),
-            "largura": types.Schema(type="NUMBER"),
-            "altura": types.Schema(type="NUMBER"),
+            "x": esquema(type="NUMBER"),
+            "y": esquema(type="NUMBER"),
+            "largura": esquema(type="NUMBER"),
+            "altura": esquema(type="NUMBER"),
         },
     )
-    evidencia = types.Schema(
+    evidencia = esquema(
         type="OBJECT",
         properties={
-            "foto_indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
-            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
-            "observacao": types.Schema(type="STRING"),
+            "foto_indice": esquema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "categoria": esquema(type="STRING", enum=list(CATEGORIAS)),
+            "observacao": esquema(type="STRING"),
             # A ordem importa: o modelo descreve, depois julga se pertence ao
             # cômodo, e só então dá as notas. Mesma razão da ordem
             # texto -> motivo -> certeza no schema da análise antiga.
-            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
-            "reflexo": types.Schema(type="BOOLEAN"),
-            "confianca_percepcao": types.Schema(type="INTEGER", minimum=0, maximum=100),
-            "confianca_escopo": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "ambiente_adjacente": esquema(type="BOOLEAN"),
+            "reflexo": esquema(type="BOOLEAN"),
+            "confianca_percepcao": esquema(type="INTEGER", minimum=0, maximum=100),
+            "confianca_escopo": esquema(type="INTEGER", minimum=0, maximum=100),
             "regiao": regiao,
         },
         required=["foto_indice", "categoria", "observacao", "ambiente_adjacente",
@@ -797,18 +764,18 @@ def _schema_escopo_evidencias(quantidade_fotos: int) -> types.Schema:
                            "ambiente_adjacente", "reflexo", "confianca_percepcao",
                            "confianca_escopo", "regiao"],
     )
-    return types.Schema(
+    return esquema(
         type="OBJECT",
         properties={
-            "fotos": types.Schema(type="ARRAY", items=foto, min_items=1),
-            "evidencias": types.Schema(type="ARRAY", items=evidencia),
+            "fotos": esquema(type="ARRAY", items=foto, min_items=1),
+            "evidencias": esquema(type="ARRAY", items=evidencia),
         },
         required=["fotos", "evidencias"],
     )
 
 
 def analisar_escopo_e_evidencias(
-    cliente: genai.Client,
+    cliente,
     blocos_imagem: list,
     ids_fotos: list,
     nome_comodo: str,
@@ -830,6 +797,7 @@ def analisar_escopo_e_evidencias(
         response_schema=_schema_escopo_evidencias(quantidade),
         max_output_tokens=16384,
         descricao_erro=f"a análise de escopo de '{nome_comodo}'",
+        tipo="escopo",
     )
     dados = _extrair_json(bruto)
 
@@ -869,7 +837,7 @@ def analisar_escopo_e_evidencias(
 
 
 def consolidar_evidencias(
-    cliente: genai.Client,
+    cliente,
     nome_comodo: str,
     resultado_escopo,
     blocos_imagem: list,
@@ -897,6 +865,7 @@ def consolidar_evidencias(
         response_schema=_schema_itens_com_certeza(CATEGORIAS),
         max_output_tokens=8192,
         descricao_erro=f"a redação do cômodo '{nome_comodo}'",
+        tipo="consolidacao",
     )
 
     try:
@@ -942,42 +911,42 @@ _VALORES_DE_ESCOPO = ["room_interior", "room_boundary", "adjacent_room",
                       "outside", "reflection", "ambiguous"]
 
 
-def _schema_evidencia_v2(quantidade_fotos: int) -> types.Schema:
+def _schema_evidencia_v2(quantidade_fotos: int) -> dict:
     """Uma evidência como a V2 a pede.
 
     "regiao" e "atributos" ficam FORA de `required` de propósito: o prompt
     manda omitir o que não se sabe, e um schema que exige o campo obriga o
     modelo a inventar (ver regra da região)."""
-    regiao = types.Schema(
+    regiao = esquema(
         type="OBJECT",
         properties={
-            "x": types.Schema(type="NUMBER"),
-            "y": types.Schema(type="NUMBER"),
-            "largura": types.Schema(type="NUMBER"),
-            "altura": types.Schema(type="NUMBER"),
+            "x": esquema(type="NUMBER"),
+            "y": esquema(type="NUMBER"),
+            "largura": esquema(type="NUMBER"),
+            "altura": esquema(type="NUMBER"),
         },
     )
-    atributos = types.Schema(
+    atributos = esquema(
         type="OBJECT",
         properties={
-            chave: types.Schema(type="STRING")
+            chave: esquema(type="STRING")
             for chave in ("material", "cor", "acabamento", "rejunte_material",
                           "rejunte_cor", "tipo", "estado", "defeito")
         },
     )
-    return types.Schema(
+    return esquema(
         type="OBJECT",
         properties={
-            "foto_indice": types.Schema(type="INTEGER", minimum=1,
+            "foto_indice": esquema(type="INTEGER", minimum=1,
                                         maximum=max(1, quantidade_fotos)),
-            "categoria": types.Schema(type="STRING", enum=list(CATEGORIAS)),
-            "observacao": types.Schema(type="STRING"),
+            "categoria": esquema(type="STRING", enum=list(CATEGORIAS)),
+            "observacao": esquema(type="STRING"),
             # A ordem importa: descreve, decide onde aquilo está, e só então
             # dá as notas — em vez de se comprometer com um número antes.
-            "escopo": types.Schema(type="STRING", enum=_VALORES_DE_ESCOPO),
-            "instancia": types.Schema(type="INTEGER", minimum=1),
-            "confianca_percepcao": types.Schema(type="INTEGER", minimum=0, maximum=100),
-            "confianca_escopo": types.Schema(type="INTEGER", minimum=0, maximum=100),
+            "escopo": esquema(type="STRING", enum=_VALORES_DE_ESCOPO),
+            "instancia": esquema(type="INTEGER", minimum=1),
+            "confianca_percepcao": esquema(type="INTEGER", minimum=0, maximum=100),
+            "confianca_escopo": esquema(type="INTEGER", minimum=0, maximum=100),
             "atributos": atributos,
             "regiao": regiao,
         },
@@ -989,28 +958,28 @@ def _schema_evidencia_v2(quantidade_fotos: int) -> types.Schema:
     )
 
 
-def _schema_escopo_v2(quantidade_fotos: int) -> types.Schema:
-    foto = types.Schema(
+def _schema_escopo_v2(quantidade_fotos: int) -> dict:
+    foto = esquema(
         type="OBJECT",
         properties={
-            "indice": types.Schema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
-            "escopo": types.Schema(type="STRING",
+            "indice": esquema(type="INTEGER", minimum=1, maximum=quantidade_fotos),
+            "escopo": esquema(type="STRING",
                                    enum=["valid", "partial", "out_of_scope"]),
-            "relevancia": types.Schema(type="INTEGER", minimum=0, maximum=100),
-            "ambiente_adjacente": types.Schema(type="BOOLEAN"),
-            "reflexo": types.Schema(type="BOOLEAN"),
-            "motivo": types.Schema(type="STRING"),
+            "relevancia": esquema(type="INTEGER", minimum=0, maximum=100),
+            "ambiente_adjacente": esquema(type="BOOLEAN"),
+            "reflexo": esquema(type="BOOLEAN"),
+            "motivo": esquema(type="STRING"),
         },
         required=["indice", "escopo", "relevancia", "ambiente_adjacente",
                   "reflexo", "motivo"],
         property_ordering=["indice", "escopo", "relevancia",
                            "ambiente_adjacente", "reflexo", "motivo"],
     )
-    return types.Schema(
+    return esquema(
         type="OBJECT",
         properties={
-            "fotos": types.Schema(type="ARRAY", items=foto, min_items=1),
-            "evidencias": types.Schema(
+            "fotos": esquema(type="ARRAY", items=foto, min_items=1),
+            "evidencias": esquema(
                 type="ARRAY", items=_schema_evidencia_v2(quantidade_fotos)),
         },
         required=["fotos", "evidencias"],
@@ -1033,7 +1002,7 @@ def _evidencias_do_json(bruto: dict, ids_fotos: list, prefixo: str) -> list:
 
 
 def analisar_escopo_e_evidencias_v2(
-    cliente: genai.Client,
+    cliente,
     blocos_imagem: list,
     ids_fotos: list,
     nome_comodo: str,
@@ -1053,6 +1022,7 @@ def analisar_escopo_e_evidencias_v2(
         # um teto baixo aqui corta o JSON no meio.
         max_output_tokens=32768,
         descricao_erro=f"a análise de escopo de '{nome_comodo}'",
+        tipo="evidencias",
     )
     dados = _extrair_json(bruto)
 
@@ -1079,7 +1049,7 @@ def analisar_escopo_e_evidencias_v2(
 
 
 def segunda_olhada_dirigida(
-    cliente: genai.Client,
+    cliente,
     blocos_imagem: list,
     ids_fotos: list,
     nome_comodo: str,
@@ -1093,10 +1063,10 @@ def segunda_olhada_dirigida(
     Devolve evidências novas — nunca texto de laudo. Lista vazia é resposta
     legítima: melhor a lacuna continuar aberta do que um item inventado."""
     quantidade = len(blocos_imagem)
-    schema = types.Schema(
+    schema = esquema(
         type="OBJECT",
         properties={
-            "evidencias": types.Schema(
+            "evidencias": esquema(
                 type="ARRAY", items=_schema_evidencia_v2(quantidade)),
         },
         required=["evidencias"],
@@ -1109,6 +1079,7 @@ def segunda_olhada_dirigida(
             response_schema=schema,
             max_output_tokens=8192,
             descricao_erro=f"a segunda olhada dirigida em '{nome_comodo}'",
+            tipo="busca_dirigida",
         )
         dados = _extrair_json(bruto)
     except Exception as erro:
@@ -1121,7 +1092,7 @@ def segunda_olhada_dirigida(
 
 
 def consolidar_evidencias_v2(
-    cliente: genai.Client,
+    cliente,
     nome_comodo: str,
     resultado_escopo,
     blocos_imagem: list,
@@ -1156,6 +1127,7 @@ def consolidar_evidencias_v2(
         response_schema=_schema_itens_com_certeza(CATEGORIAS),
         max_output_tokens=16384,
         descricao_erro=f"a redação do cômodo '{nome_comodo}'",
+        tipo="consolidacao",
     )
 
     try:

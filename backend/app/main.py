@@ -103,10 +103,22 @@ app.include_router(roteador)
 
 @app.get("/api/saude")
 def saude():
-    """Sonda para o Docker. Não diz nada sobre dados nem sobre a chave."""
+    """Sonda para o Docker. Não diz nada sobre dados nem sobre as chaves —
+    só QUAL provedor e modelo estão escolhidos e se cada chave existe."""
     from core.config import MODEL_NAME
-    return {"ok": True, "modelo": MODEL_NAME,
-            "gemini_configurado": bool(os.environ.get("GEMINI_API_KEY"))}
+    from core.providers import validacao_ligada
+    from core.providers.glm import MODELO_PADRAO as MODELO_GLM
+
+    provedor = (os.environ.get("VISION_PROVIDER") or "gemini").strip().lower()
+    modelo = {"gemini": MODEL_NAME,
+              "glm": os.environ.get("GLM_MODEL") or MODELO_GLM,
+              "claude": os.environ.get("CLAUDE_MODEL", "")}.get(provedor, "")
+    return {"ok": True, "provedor": provedor, "modelo": modelo,
+            "validacao_ligada": validacao_ligada(),
+            "validador": (os.environ.get("VALIDATOR_PROVIDER") or "claude") if validacao_ligada() else None,
+            "gemini_configurado": bool(os.environ.get("GEMINI_API_KEY")),
+            "glm_configurado": bool(os.environ.get("GLM_API_KEY")),
+            "claude_configurado": bool(os.environ.get("CLAUDE_API_KEY"))}
 
 
 # O build do frontend, servido pela própria API em produção — um contêiner só

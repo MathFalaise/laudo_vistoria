@@ -222,6 +222,10 @@ class Evidencia(Base, _ComId):
     comodo: Mapped["Comodo"] = relationship(back_populates="evidencias")
     foto: Mapped["Foto"] = relationship(back_populates="evidencias")
     item: Mapped["ItemLaudo | None"] = relationship(back_populates="evidencias")
+    validacao: Mapped["ValidacaoEvidencia | None"] = relationship(
+        back_populates="evidencia", uselist=False, cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     @property
     def regiao(self) -> dict | None:
@@ -396,3 +400,58 @@ class Job(Base, _ComId):
     cancelamento_pedido: Mapped[bool] = mapped_column(Boolean, default=False)
 
     vistoria: Mapped["Vistoria"] = relationship(back_populates="jobs")
+
+
+# --------------------------------------------------------------------------
+# Multimodelo (desde 05/10/2026). Tabelas NOVAS, sem colunas novas nas
+# existentes: a subida da aplicação cria tabela que falta (db.criar_esquema),
+# mas não acrescenta coluna — assim um banco antigo atualizado sem rodar a
+# migração continua funcionando. A migração Alembic cria as mesmas tabelas
+# para quem evolui o esquema por ela.
+# --------------------------------------------------------------------------
+
+class ValidacaoEvidencia(Base, _ComId):
+    """Quem viu uma evidência e o que o validador visual concluiu.
+
+    Uma linha por evidência (no máximo). A evidência reanalisada é a MESMA
+    linha de Evidencia, atualizada; aqui fica a observação original e quantas
+    reanálises houve, para a auditoria mostrar o que mudou e por quê."""
+
+    __tablename__ = "validacao_evidencia"
+
+    evidencia_id: Mapped[str] = mapped_column(
+        ForeignKey("evidencia.id", ondelete="CASCADE"), unique=True, index=True)
+    origem: Mapped[str] = mapped_column(String(160), default="")       # provedor:modelo
+    revisao: Mapped[int] = mapped_column(Integer, default=0)
+    observacao_original: Mapped[str] = mapped_column(Text, default="")
+    decisao: Mapped[str] = mapped_column(String(30), default="")       # aprovada, rejeitada...
+    motivo: Mapped[str] = mapped_column(Text, default="")
+    validador: Mapped[str] = mapped_column(String(160), default="")    # provedor:modelo
+
+    evidencia: Mapped["Evidencia"] = relationship(back_populates="validacao")
+
+
+class ChamadaModelo(Base, _ComId):
+    """Uma chamada a modelo (telemetria de custo). Só identificadores e
+    números: nunca prompt, resposta, imagem ou chave."""
+
+    __tablename__ = "chamada_modelo"
+
+    vistoria_id: Mapped[str] = mapped_column(
+        ForeignKey("vistoria.id", ondelete="CASCADE"), index=True)
+    comodo_id: Mapped[str | None] = mapped_column(
+        ForeignKey("comodo.id", ondelete="SET NULL"), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    foto_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provedor: Mapped[str] = mapped_column(String(40))
+    modelo: Mapped[str] = mapped_column(String(120))
+    tipo: Mapped[str] = mapped_column(String(40), default="")
+    sucesso: Mapped[bool] = mapped_column(Boolean, default=True)
+    erro: Mapped[str] = mapped_column(String(120), default="")
+    duracao_s: Mapped[float] = mapped_column(Float, default=0.0)
+    tentativas: Mapped[int] = mapped_column(Integer, default=1)
+    imagens: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_entrada: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_saida: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    custo_usd: Mapped[float | None] = mapped_column(Float, nullable=True)

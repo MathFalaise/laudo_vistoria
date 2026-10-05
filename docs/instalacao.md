@@ -123,6 +123,22 @@ python validar.py "C:\caminho\para\o\imovel"
 
 `--evidencias` liga a validação de escopo por foto, que na web é o padrão.
 
+Provedores e validação visual (opcionais; padrão: Gemini, sem validador):
+
+```bash
+python main.py "C:\caminho\para\o\imovel" --evidencias --provedor glm --validador claude
+```
+
+```bash
+python benchmark.py "C:\caminho\para\o\imovel" --provedores gemini glm glm+claude
+```
+
+`--provedor` escolhe quem analisa as fotos; `--validador` liga a conferência
+visual das evidências duvidosas (só com `--evidencias`). Cada provedor precisa
+da sua chave no `.env` (`GLM_API_KEY`, `CLAUDE_API_KEY` e `CLAUDE_MODEL`). No
+fim, o CLI mostra chamadas, tokens e custo e grava o detalhe em
+`Telemetria_Modelos.json`, na pasta do imóvel.
+
 ---
 
 ## Testes
@@ -131,8 +147,17 @@ python validar.py "C:\caminho\para\o\imovel"
 python -m pytest
 ```
 
-Nenhum teste chama a API do Gemini — as respostas do modelo são simuladas.
+Nenhum teste chama API de modelo — Gemini, GLM e Claude são simulados.
 Rodar não custa nada e não depende de rede.
+
+Há testes de integração opcionais, que chamam a API de verdade com uma imagem
+SINTÉTICA (nunca foto de cliente) para provar que o provedor recebe a imagem e
+devolve JSON no formato pedido. Só rodam se você pedir, e cada um custa uma
+chamada:
+
+```bash
+INTEGRATION_TESTS=1 python -m pytest tests/test_integracao_provedores.py
+```
 
 ---
 

@@ -1,8 +1,10 @@
 """
 Ponto de entrada: percorre a pasta do imóvel (uma subpasta por cômodo),
-processa cada cômodo com a API do Gemini e gera:
+processa cada cômodo com o modelo (VISION_PROVIDER; padrão: Gemini) e gera:
   - um .txt de laudo dentro de cada pasta de cômodo
   - um .txt consolidado com o imóvel inteiro, na raiz da pasta do imóvel
+  - Telemetria_Modelos.json na raiz: uma linha por chamada (provedor, modelo,
+    tokens, tempo, custo estimado) — sem prompt nem imagem
 
 Uso:
     python main.py "C:\\caminho\\para\\o\\imovel"
@@ -13,6 +15,8 @@ import json
 import os
 
 from config import LIMIAR_CERTEZA, ROTULOS_CATEGORIA, USAR_MOTOR_DE_EVIDENCIAS
+from core import telemetria
+from core.providers import PROVEDORES, provedor_validador
 from gemini_client import criar_cliente
 from core.pipeline import conflitos_para_pendencias, processar_comodo
 from report_writer import parsear_txt_comodo, salvar_txt_comodo, salvar_relatorio_completo
@@ -23,6 +27,7 @@ from validacao import ler_pendencias, salvar_pendencias
 # rastro — foto -> evidência -> item — para auditoria e para a importação da
 # vistoria no sistema web.
 NOME_ARQUIVO_EVIDENCIAS = "_evidencias.json"
+NOME_ARQUIVO_TELEMETRIA = "Telemetria_Modelos.json"
 
 
 def listar_pastas_comodo(pasta_imovel: str) -> list:
@@ -46,6 +51,24 @@ def _avisar_pendencias(pendencias: list, caminho_pendencias: str, pasta_imovel: 
         print(f"  - {pendencia['comodo']} / {rotulo} ({pendencia['certeza']}%): {pendencia['motivo']}")
     print(f"Preencha as decisões em: {caminho_pendencias}")
     print(f'Depois rode:  python validar.py "{pasta_imovel}"')
+
+
+def _gravar_telemetria(pasta_imovel: str, chamadas: list) -> None:
+    """Resumo de custo no terminal e o detalhe em Telemetria_Modelos.json."""
+    if not chamadas:
+        return
+    resumo = telemetria.resumir(chamadas)
+    caminho = os.path.join(pasta_imovel, NOME_ARQUIVO_TELEMETRIA)
+    with open(caminho, "w", encoding="utf-8") as arquivo:
+        json.dump({"resumo": resumo, "chamadas": chamadas}, arquivo, ensure_ascii=False, indent=2)
+    print("\nChamadas a modelo:")
+    for chave, grupo in resumo.items():
+        custo = (f"US$ {grupo['custo_usd']:.4f}" if grupo["custo_usd"] is not None
+                 else "custo desconhecido (preço do modelo não registrado)")
+        print(f"  {chave}: {grupo['chamadas']} chamada(s), {grupo['falhas']} falha(s), "
+              f"{grupo['tokens_entrada']} tokens de entrada, {grupo['tokens_saida']} de saída, "
+              f"{grupo['duracao_s']:.0f}s — {custo}")
+    print(f"  Detalhe: {caminho}")
 
 
 def main():
@@ -109,7 +132,40 @@ def main():
             "é ela que pega item que ficou de fora do laudo."
         ),
     )
+    parser.add_argument(
+        "--provedor",
+        choices=PROVEDORES,
+        help=(
+            "Modelo que analisa as fotos nesta execução (padrão: VISION_PROVIDER "
+            "do ambiente, ou gemini). Vale também para a conferência."
+        ),
+    )
+    validacao = parser.add_mutually_exclusive_group()
+    validacao.add_argument(
+        "--validador",
+        choices=PROVEDORES,
+        help=(
+            "Liga a validação visual seletiva (só no motor --evidencias) com este "
+            "provedor: as evidências duvidosas são conferidas olhando a foto de "
+            "novo. Padrão: VALIDATION_ENABLED / VALIDATOR_PROVIDER do ambiente."
+        ),
+    )
+    validacao.add_argument(
+        "--sem-validacao",
+        action="store_true",
+        help="Desliga a validação visual nesta execução, mesmo com VALIDATION_ENABLED=1.",
+    )
     args = parser.parse_args()
+
+    # As escolhas de provedor vão para o ambiente do processo: assim a
+    # conferência do fim (conferir.py) usa os mesmos modelos que o laudo.
+    if args.provedor:
+        os.environ["VISION_PROVIDER"] = args.provedor
+    if args.validador:
+        os.environ["VALIDATION_ENABLED"] = "1"
+        os.environ["VALIDATOR_PROVIDER"] = args.validador
+    if args.sem_validacao:
+        os.environ["VALIDATION_ENABLED"] = "0"
 
     todos = listar_pastas_comodo(args.pasta_imovel)
     if not todos:
@@ -142,7 +198,21 @@ def main():
     }[motor_escolhido], flush=True)
 
     cliente = criar_cliente()
+    validador = provedor_validador()
+    if validador is not None and motor_escolhido != MOTOR_V2:
+        print("Validação visual desligada: ela só existe no motor --evidencias.", flush=True)
+        validador = None
+    print(f"Analista: {cliente.nome} ({cliente.modelo})"
+          + (f" | validador: {validador.nome} ({validador.modelo})" if validador else ""),
+          flush=True)
 
+    with telemetria.coletar() as chamadas:
+        _processar(args, todos, nomes_comodo, cliente, validador, usar_evidencias,
+                   motor_escolhido)
+    _gravar_telemetria(args.pasta_imovel, chamadas)
+
+
+def _processar(args, todos, nomes_comodo, cliente, validador, usar_evidencias, motor_escolhido):
     # Pendências já existentes de cômodos que NÃO forem reprocessados
     # continuam valendo — o laudo deles não muda.
     iniciais = ler_pendencias(args.pasta_imovel)
@@ -156,6 +226,7 @@ def main():
                 cliente, pasta_comodo, nome_comodo, args.notas,
                 usar_evidencias=usar_evidencias, motor=motor_escolhido,
                 progresso=lambda texto: print(f"  {texto}", flush=True),
+                validador=validador,
             )
         except Exception as erro:
             # Um cômodo problemático não deve derrubar o laudo inteiro dos

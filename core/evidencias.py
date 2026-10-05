@@ -107,6 +107,10 @@ class MotivoDescarte(str, Enum):
     PERCEPCAO_INSUFICIENTE = "percepcao_insuficiente"
     OBSERVACAO_VAZIA = "observacao_vazia"
     CONTRADICAO = "contradicao"
+    # O validador visual (core/validacao_visual.py) não sustentou a evidência,
+    # ou a validação falhou com a política conservadora. Só é aplicado DEPOIS
+    # de todas as regras acima: o validador tira, nunca devolve.
+    VALIDACAO_VISUAL = "validacao_visual"
 
 
 class TipoConflito(str, Enum):
@@ -117,6 +121,13 @@ class TipoConflito(str, Enum):
     CATEGORIA = "category_conflict"
     CONTAGEM = "count_uncertain"
     COBERTURA = "possible_uncovered_item"
+    VALIDACAO = "validation_conflict"
+
+
+# Resultados da validação visual que VETAM a evidência (ver
+# core/validacao_visual.py). Os outros ("aprovada", "corrigida",
+# "nao_validada_limite", "falha_mantida") não mudam a decisão do escopo.
+VALIDACOES_QUE_VETAM = ("rejeitada", "nao_resolvida", "conflito_validacao", "falha")
 
 
 @dataclass(frozen=True)
@@ -204,6 +215,17 @@ class Evidencia:
     categoria_proposta: str = ""               # antes da normalização canônica
     atributos_em_conflito: list = field(default_factory=list)
 
+    # Rastreabilidade multimodelo (desde 05/10/2026). Quem viu a evidência
+    # ("provedor:modelo"), quantas reanálises dirigidas ela sofreu (a
+    # evidência reanalisada é ATUALIZADA no lugar, com o mesmo id — nunca vira
+    # outra evidência solta) e o que o validador visual concluiu.
+    origem: str = ""
+    revisao: int = 0
+    observacao_original: str = ""
+    validacao: str = ""
+    validacao_motivo: str = ""
+    validacao_por: str = ""
+
     @property
     def aceita(self) -> bool:
         return self.status is StatusEvidencia.ACEITA
@@ -244,6 +266,12 @@ class Evidencia:
             "detalhe_descarte": self.detalhe_descarte,
             "corroborada_por": list(self.corroborada_por),
             "atributos_em_conflito": list(self.atributos_em_conflito),
+            "origem": self.origem,
+            "revisao": self.revisao,
+            "observacao_original": self.observacao_original,
+            "validacao": self.validacao,
+            "validacao_motivo": self.validacao_motivo,
+            "validacao_por": self.validacao_por,
         }
 
 
@@ -404,6 +432,23 @@ def validar_escopo(evidencias: list, analises: dict, nome_comodo: str) -> Result
                             f"suficiente de que faz parte de {nome_comodo}."),
                     evidencias=[evidencia.id], fotos=[evidencia.foto_id],
                     tipo=TipoConflito.ESCOPO,
+                ),
+            )
+            continue
+
+        # 6. Veto do validador visual. Fica DEPOIS de todas as regras: uma
+        #    evidência que o código descartou continua descartada pelo motivo
+        #    do código (o validador nunca a recebeu), e o validador só pode
+        #    TIRAR do laudo o que o código aceitaria — nunca devolver.
+        if evidencia.validacao in VALIDACOES_QUE_VETAM:
+            descartar(
+                evidencia, MotivoDescarte.VALIDACAO_VISUAL,
+                evidencia.validacao_motivo,
+                ConflitoEscopo(
+                    categoria=evidencia.categoria,
+                    resumo=(f"{evidencia.observacao} — {evidencia.validacao_motivo}"),
+                    evidencias=[evidencia.id], fotos=[evidencia.foto_id],
+                    tipo=TipoConflito.VALIDACAO,
                 ),
             )
             continue

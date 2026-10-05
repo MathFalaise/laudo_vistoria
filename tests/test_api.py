@@ -175,11 +175,19 @@ def processar(cliente, vistoria_id, **corpo):
 # Critérios 1-2: abrir e entrar
 # ==========================================================================
 
-def test_saude_nao_vaza_a_chave(cliente):
+def test_saude_nao_vaza_a_chave(cliente, monkeypatch):
+    # Conjunto EXATO de campos: nada além de qual provedor/modelo está escolhido
+    # e SE cada chave existe (desde 05/10/2026, com GLM e Claude). Nenhuma chave.
+    monkeypatch.setenv("GLM_API_KEY", "chave-glm-de-teste")
+    monkeypatch.setenv("CLAUDE_API_KEY", "chave-claude-de-teste")
     dados = cliente.get("/api/saude").json()
     assert dados["ok"] is True
-    assert "chave-falsa-de-teste" not in json.dumps(dados)
-    assert set(dados) == {"ok", "modelo", "gemini_configurado"}
+    texto = json.dumps(dados)
+    for chave in ("chave-falsa-de-teste", "chave-glm-de-teste", "chave-claude-de-teste"):
+        assert chave not in texto
+    assert set(dados) == {"ok", "provedor", "modelo", "validacao_ligada", "validador",
+                          "gemini_configurado", "glm_configurado", "claude_configurado"}
+    assert dados["provedor"] == "gemini" and dados["glm_configurado"] is True
 
 
 def test_login_e_logout(cliente):
@@ -855,3 +863,60 @@ def test_nenhuma_resposta_contem_a_chave(logado, vistoria, gemini_falso):
         corpo = logado.get(rota).text
         assert "chave-falsa-de-teste" not in corpo, rota
         assert "GEMINI_API_KEY" not in corpo, rota
+
+
+# ==========================================================================
+# Multimodelo: validação visual persistida e custo por vistoria
+# ==========================================================================
+
+def _validador_que_rejeita():
+    """Validador falso: rejeita toda evidência que recebe (com a foto)."""
+    from core.providers import Provedor
+
+    class ValidadorQueRejeita(Provedor):
+        nome, modelo = "claude", "claude-de-teste"
+
+        def __init__(self):
+            self.imagens = []
+
+        def gerar_json(self, partes, esquema, max_tokens, descricao, tipo=""):
+            from core.providers import Imagem
+            prompt = next(p for p in reversed(partes) if isinstance(p, str))
+            self.imagens.append(sum(isinstance(p, Imagem) for p in partes))
+            ids = [trecho.split('"')[1] for trecho in prompt.split("- id ")[1:]]
+            return json.dumps({"decisoes": [
+                {"evidence_id": i, "decision": "rejected", "reason": "a foto não mostra isso"}
+                for i in ids]})
+
+    return ValidadorQueRejeita()
+
+
+def test_validacao_visual_persistida_com_custo(logado, vistoria, gemini_falso, monkeypatch):
+    import core.providers as provedores
+
+    gemini_falso(roteiro_padrao())
+    validador = _validador_que_rejeita()
+    monkeypatch.setattr(provedores, "provedor_validador", lambda *a, **k: validador)
+    comodo = criar_comodo(logado, vistoria)
+    enviar(logado, comodo, [("a.jpg", jpeg(), "image/jpeg"), ("b.jpg", jpeg(), "image/jpeg")])
+    job = processar(logado, vistoria)
+    assert job["estado"] == EstadoJob.CONCLUIDO, job
+
+    # o piso (percepção 70) foi ao validador, COM a foto, e foi rejeitado
+    assert validador.imagens == [1]
+    evidencias = logado.get(f"/api/comodos/{comodo}/evidencias").json()
+    piso = next(e for e in evidencias if "cerâmica cinza" in e["observacao"])
+    assert piso["status"] == "descartada" and piso["motivo_descarte"] == "validacao_visual"
+    assert piso["validacao"]["decisao"] == "rejeitada"
+    assert piso["validacao"]["validador"] == "claude:claude-de-teste"
+    paredes = next(e for e in evidencias if "pintura branca" in e["observacao"])
+    assert paredes["status"] == "aceita" and paredes["validacao"]["origem"].startswith("gemini:")
+
+    pendencias = logado.get(f"/api/vistorias/{vistoria}/pendencias").json()
+    lista = pendencias if isinstance(pendencias, list) else pendencias.get("pendencias", [])
+    assert any(p["motivo"].startswith("VALIDAÇÃO VISUAL") for p in lista)
+
+    custos = logado.get(f"/api/vistorias/{vistoria}/custos").json()
+    assert custos["chamadas"] >= 2
+    assert "gemini:gemini-3.5-flash-lite" in custos["por_modelo"]
+
