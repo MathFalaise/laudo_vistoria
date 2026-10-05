@@ -34,6 +34,14 @@ NOME_ARQUIVO_PENDENCIAS = "Pendencias_Validacao.txt"
 MARCADOR_ITEM = "--- #"
 DECISOES_VALIDAS = ("OK", "CORRIGIR", "REMOVER")
 
+# Tipos de pendência cujo "Item:" ainda NÃO está no laudo (ver
+# aplicar_no_texto). TIPO_CONFLITO é o pipeline.TIPO_CONFLITO_ESCOPO — com
+# que chegam ao arquivo tanto o conflito de escopo quanto o da validação
+# visual —, repetido aqui para não importar o pipeline inteiro.
+TIPO_FALTA = "falta"
+TIPO_CONFLITO = "scope_conflict"
+TIPOS_PROPOSTA = (TIPO_FALTA, TIPO_CONFLITO)
+
 _CATEGORIA_POR_ROTULO = {rotulo: categoria for categoria, rotulo in ROTULOS_CATEGORIA.items()}
 
 # Campo no arquivo (maiúsculo, sem acento) -> chave no dicionário.
@@ -80,6 +88,12 @@ def _cabecalho(pasta_imovel: str) -> str:
         "proposta de texto. Nessas, OK = aceito, pode acrescentar ao laudo;\n"
         "REMOVER = descarte a proposta; CORRIGIR = acrescente, mas com o texto\n"
         "que eu escrevi em CORREÇÃO.\n"
+        "\n"
+        'Pendência com "Tipo: scope_conflict" (motivo "CONFLITO DE ESCOPO" ou\n'
+        '"VALIDAÇÃO VISUAL") também NÃO está no laudo, e a linha "Item" é só um\n'
+        "resumo do conflito, não texto de laudo. Nessas, CORRIGIR = é deste\n"
+        "cômodo, acrescente a linha que eu escrevi em CORREÇÃO; REMOVER = fica\n"
+        "fora do laudo. OK não vale (a pendência continua aberta).\n"
         "\n"
         "Como preencher (uma linha por campo):\n"
         "  DECISÃO:  OK        o item está certo, fica como está\n"
@@ -184,13 +198,26 @@ def aplicar_no_texto(texto_categoria: str, categoria: str, pendencia: dict) -> t
 
     itens = [item for item in pendencia.get("texto", "").split("\n") if item.strip()]
 
-    # Pendência de item FALTANDO (vem da conferência do conferir.py): a
-    # linha em "Item:" é uma proposta que ainda NÃO está no laudo, então
-    # não adianta procurá-la no texto. OK aceita a proposta, CORRIGIR
-    # aceita com o texto do vistoriador, REMOVER descarta.
-    if pendencia.get("tipo") == "falta":
+    # Pendências de PROPOSTA: o que está em "Item:" ainda NÃO está no laudo,
+    # então não adianta procurá-lo no texto. REMOVER descarta; CORRIGIR
+    # acrescenta o texto do vistoriador.
+    # - "falta" (conferência): "Item:" é uma linha pronta, e OK a aceita.
+    # - conflito de escopo ou da validação visual: "Item:" é um RESUMO do
+    #   conflito, não uma linha de laudo. OK não tem o que acrescentar e é
+    #   ambíguo ("o laudo fica como está" ou "confirmo que é deste
+    #   cômodo"?) — lido do segundo jeito, sumiria em silêncio um item real
+    #   de um documento assinado. Por isso fica em aberto com a explicação,
+    #   como na web; "deixar fora do laudo" já é o REMOVER.
+    tipo = pendencia.get("tipo")
+    if tipo in TIPOS_PROPOSTA:
         if pendencia["decisao"] == "REMOVER":
             return texto_categoria, None
+        if tipo == TIPO_CONFLITO and pendencia["decisao"] != "CORRIGIR":
+            return texto_categoria, (
+                "conflito não traz linha pronta para o laudo — use CORRIGIR e "
+                "escreva a linha em CORREÇÃO se é deste cômodo, ou REMOVER "
+                "para deixar fora do laudo"
+            )
         novas = itens
         if pendencia["decisao"] == "CORRIGIR":
             novas = [normalizar_linha(linha)

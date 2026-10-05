@@ -23,7 +23,7 @@ python revisar.py "C:\caminho"     # repadroniza o texto; recusa se houver pend�
 python benchmark.py "C:\caminho" --motores classico evidencias_v2   # A/B
 python main.py "C:\caminho" --evidencias --provedor glm --validador claude
 python benchmark.py "C:\caminho" --provedores gemini glm glm+claude  # A/B de provedor
-python -m pytest                   # 344 testes, nenhum chama a API
+python -m pytest                   # 354 testes, nenhum chama a API
 ```
 
 - A pasta do imóvel tem uma subpasta por cômodo, com as fotos dele
@@ -72,7 +72,7 @@ core/                MOTOR. Regra de laudo mora só aqui; CLI e web chamam isto.
   validacao.py       formato e aplicação do Pendencias_Validacao.txt
 backend/app/         FastAPI + SQLAlchemy + SQLite (Alembic). Motor <-> banco.
 frontend/src/        React + TypeScript + Vite, celular primeiro.
-tests/               344 testes (+3 de integração com API real, desligados).
+tests/               354 testes (+3 de integração com API real, desligados).
 main.py, validar.py, conferir.py, revisar.py, benchmark.py    CLI
 config.py, style_guide.py, gemini_client.py, ... (raiz)       aliases
 regras_validadas.txt regras de redação adotadas (conjunto inicial)
@@ -152,11 +152,19 @@ errar:
 |---|---|---|---|
 | normal (a linha está no laudo) | mantém a linha | troca pela CORREÇÃO | **apaga a linha do laudo** |
 | `Tipo: falta` (proposta) | acrescenta o Item | acrescenta a CORREÇÃO | descarta a proposta |
+| `Tipo: scope_conflict` (conflito de escopo ou validação visual) | **erro, fica aberta** | acrescenta a CORREÇÃO | fica fora do laudo |
 
 Para **recusar** a sugestão de uma pendência normal e manter o laudo, a
 decisão é **OK**, nunca REMOVER. Pendência sem DECISÃO fica aberta e não mexe
 no laudo. O `Item:` de pendência normal tem que bater ao caractere com a linha
 do `.txt` — copie da linha, não redigite.
+
+No `scope_conflict` o `Item:` é um **resumo** do conflito, não linha de laudo,
+e nunca é acrescentado. OK é recusado de propósito (05/10/2026): o laudo não
+tem o que manter e o OK é ambíguo — lido como "confirmo que é deste cômodo",
+sumiria em silêncio um item real; "deixar fora" já é o REMOVER. A web faz o
+mesmo (`servicos.decidir_pendencia`). Os conflitos do validador visual
+(motivo "VALIDAÇÃO VISUAL") chegam ao `.txt` com esse mesmo tipo.
 
 ## Decisões e o porquê
 
