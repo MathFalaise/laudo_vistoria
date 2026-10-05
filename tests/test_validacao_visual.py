@@ -50,6 +50,10 @@ class Falso(Provedor):
         etapa = _etapa(prompt)
         self.chamadas.append({"etapa": etapa, "tipo": tipo, "prompt": prompt,
                               "imagens": sum(isinstance(p, Imagem) for p in partes)})
+        # como os provedores reais: uma linha de telemetria por chamada
+        from core import telemetria
+        telemetria.registrar(telemetria.RegistroChamada(
+            provedor=self.nome, modelo=self.modelo, tipo=tipo, sucesso=True, duracao_s=0.0))
         resposta = self.roteiro.get(etapa, {"evidencias": []})
         if isinstance(resposta, list):
             resposta = resposta.pop(0)
