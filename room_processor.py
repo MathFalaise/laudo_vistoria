@@ -1,16 +1,14 @@
-from gemini_client import analisar_comodo
-from image_utils import codificar_fotos_comodo
+"""Alias de compatibilidade: o módulo real é core/room_processor.py.
 
+O motor foi para o pacote `core` em 25/09/2026, na evolução para aplicação
+web. Este arquivo existe para que `import room_processor` continue funcionando nos
+scripts de linha de comando e em qualquer coisa que já apontasse para cá — e
+faz isso apontando para o MESMO objeto de módulo, não para uma cópia, de modo
+que não há como as duas versões divergirem.
+"""
 
-def processar_comodo(cliente, pasta_comodo: str, nome_comodo: str, notas_extras: str = "") -> tuple:
-    """Devolve (dados, incertos) — ver gemini_client.analisar_comodo.
-    Sem fotos na pasta, devolve ({}, [])."""
-    print(f"Lendo fotos de: {nome_comodo}...", flush=True)
-    blocos_imagem = codificar_fotos_comodo(pasta_comodo)
+import sys
 
-    if not blocos_imagem:
-        print(f"  Nenhuma foto encontrada em {pasta_comodo}, pulando.")
-        return {}, []
+from core import room_processor as _modulo_real
 
-    print("  -> Analisando cômodo (1 chamada, 8 categorias)...", flush=True)
-    return analisar_comodo(cliente, blocos_imagem, nome_comodo, notas_extras)
+sys.modules[__name__] = _modulo_real

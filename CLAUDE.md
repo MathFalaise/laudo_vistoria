@@ -1,212 +1,298 @@
 # laudo_vistoria
 
-Gerador automático de laudo de vistoria de entrada de imóvel residencial,
-a partir de fotos organizadas por cômodo. Usa a API de visão do Google
-Gemini (camada paga) para descrever cada cômodo em 8 categorias e
-grava o resultado em arquivos `.txt`.
+Gerador de laudo de vistoria de entrada de imóvel residencial a partir de
+fotos organizadas por cômodo. O Google Gemini (camada paga) descreve cada
+cômodo em 8 categorias — paredes, piso, teto, porta, janela, eletrico,
+mobilia, obs — e o resultado sai em `.txt`, em português.
 
 ## Uso
 
+Duas frentes, **um motor só** (`core/`): o laudo sai igual pelas duas.
+
+**Linha de comando** — é o que gerou todas as vistorias reais:
+
 ```bash
-python main.py "C:\caminho\para\o\imovel"      # gera laudo + pendências
-python main.py "C:\caminho" --comodos "Sala"   # refaz só esses cômodos
-python validar.py "C:\caminho\para\o\imovel"   # aplica as decisões do vistoriador
-python conferir.py "C:\caminho\para\o\imovel"  # confere as fotos contra o laudo
-python revisar.py "C:\caminho\para\o\imovel"   # opcional: repadroniza o texto
+python main.py "C:\caminho\do\imovel" --notas "..."   # laudo + conferência + pendências
+python main.py "C:\caminho" --comodos "Sala" "BWC"    # refaz só esses cômodos
+python main.py "C:\caminho" --evidencias              # motor V2 (padrão continua o clássico)
+python main.py "C:\caminho" --evidencias-v1           # V1, só para comparação
+python validar.py "C:\caminho"     # aplica as decisões do Pendencias_Validacao.txt
+python conferir.py "C:\caminho"    # conferência avulsa, para laudo antigo
+python revisar.py "C:\caminho"     # repadroniza o texto; recusa se houver pendência aberta
+python benchmark.py "C:\caminho" --motores classico evidencias_v2   # A/B
+python -m pytest                   # 278 testes, nenhum chama a API
 ```
 
-O `main.py` já roda a conferência no fim (desligue com `--sem-conferencia`);
-o `conferir.py` avulso serve para laudo antigo, gerado antes dela.
+- A pasta do imóvel tem uma subpasta por cômodo, com as fotos dele
+  (`.jpg`, `.jpeg`, `.png`, `.heic`). O `.txt` de cada cômodo é gravado na
+  própria subpasta; o `Laudo_Vistoria_Completo.txt` e o
+  `Pendencias_Validacao.txt` na raiz do imóvel — **ambos têm dado de
+  cliente**, nunca vão para o repositório.
+- `--notas` é o fato confirmado em campo (cor de tinta, testes feitos, "imóvel
+  sem luz"). O modelo usa em vez de adivinhar pela foto.
+- `main.py` roda a conferência no fim (`--sem-conferencia` desliga).
+- `revisar.py` reescreve os itens, e pendência aberta deixaria de bater com o
+  laudo — por isso recusa rodar com pendência aberta (`--ignorar-pendencias`
+  força). Ordem: `main.py` → `validar.py` → `revisar.py`.
+- `LAUDO_MOTOR_EVIDENCIAS=1` troca o padrão do CLI para a V2; `--classico` força
+  o clássico.
+- Exige `GEMINI_API_KEY` (aistudio.google.com/apikey, projeto com faturamento).
 
-A pasta do imóvel deve conter uma subpasta por cômodo, cada uma com as
-fotos daquele cômodo (`.jpg`, `.jpeg`, `.png`, `.heic`).
+**Aplicação web** (desde 25/09/2026): `docker compose up -d`, depois
+http://localhost:8000. Ver `docs/instalacao.md`, `docs/producao.md`,
+`docs/backup.md`. **O Dockerfile e o compose nunca foram executados** — Docker
+não está instalado na máquina de desenvolvimento. É o primeiro teste a fazer
+antes de confiar neles.
 
-Nessa ordem: `revisar.py` reescreve o texto dos itens, e pendências em
-aberto deixariam de bater com o laudo — por isso ele se recusa a rodar se
-houver pendência aberta (a não ser com `--ignorar-pendencias`).
+## Onde fica cada coisa
 
-Requer a variável de ambiente `GEMINI_API_KEY` definida antes de rodar
-(gerada em https://aistudio.google.com/apikey, num projeto com
-faturamento ativo — ver "Decisões importantes").
+```
+core/                MOTOR. Regra de laudo mora só aqui; CLI e web chamam isto.
+  config.py          modelo, limiares, categorias e rótulos
+  style_guide.py     TODO o jeito de escrever: REGRAS_GERAIS, exemplos, prompts
+  gemini_client.py   chamadas ao Gemini, segunda olhada, conferência
+  image_utils.py     fotos -> types.Part; mosaicos da conferência
+  room_processor.py  processa um cômodo (motor clássico)
+  pipeline.py        escolhe o motor e orquestra fotos -> evidências -> laudo
+  evidencias.py      validação de escopo, agrupamento de objetos, conflitos
+  taxonomia.py       escopos, elementos de fronteira, categoria canônica, rodapé
+  cobertura.py       checklist por tipo de cômodo -> busca dirigida
+  report_writer.py   grava os .txt; travas determinísticas de texto
+  validacao.py       formato e aplicação do Pendencias_Validacao.txt
+backend/app/         FastAPI + SQLAlchemy + SQLite (Alembic). Motor <-> banco.
+frontend/src/        React + TypeScript + Vite, celular primeiro.
+tests/               278 testes.
+main.py, validar.py, conferir.py, revisar.py, benchmark.py    CLI
+config.py, style_guide.py, gemini_client.py, ... (raiz)       aliases
+regras_validadas.txt regras de redação adotadas (conjunto inicial)
+```
 
-## Arquitetura
+Os módulos da raiz com nome de módulo do motor **não são cópias**: fazem
+`sys.modules[__name__] = core.<modulo>`, então são o mesmo objeto. Edite
+sempre em `core/`.
 
-- **config.py** — configurações gerais: chave de API, nome do modelo,
-  extensões de imagem aceitas, tamanho máximo de redimensionamento e a
-  lista `CATEGORIAS` (paredes, piso, teto, porta, janela, eletrico,
-  mobilia, obs) com seus rótulos de exibição.
-- **style_guide.py** — concentra todo o "jeito de escrever" do laudo:
-  regras gerais de formatação (`REGRAS_GERAIS`), exemplos de padrão
-  validado (`EXEMPLOS_MOBILIA`), instruções por categoria
-  (`INSTRUCAO_CATEGORIA`) e `montar_prompt_comodo`, que monta um único
-  prompt cobrindo as 8 categorias de um cômodo e pede a resposta em JSON.
-- **image_utils.py** — localiza as fotos de um cômodo, redimensiona (lado
-  maior limitado a `TAMANHO_MAX_IMAGEM`) e converte em `Part` do SDK
-  `google-genai`, prontos para entrar no `contents` da mensagem da API.
-- **gemini_client.py** — camada fina sobre a API do Google Gemini:
-  `analisar_comodo` envia as fotos + o prompt do cômodo, faz **1 única
-  chamada de API por cômodo** e devolve `(dados, incertos)`: o texto de
-  cada categoria e a lista de itens com certeza abaixo de
-  `config.LIMIAR_CERTEZA`. O `response_schema` pede cada categoria como
-  lista de itens `{texto, motivo, certeza}`, nessa ordem (o modelo escreve
-  o item, diz o que é duvidoso e só depois dá a nota).
-- **validacao.py** — formato do `Pendencias_Validacao.txt` (gravado na
-  pasta do imóvel, tem dado de cliente), leitura das decisões do
-  vistoriador (OK / CORRIGIR / REMOVER), aplicação nos `.txt` dos cômodos e
-  adoção das regras gerais em `regras_validadas.txt`.
-- **validar.py** — CLI do fluxo acima; reconstrói o laudo consolidado.
-- **regras_validadas.txt** — regras gerais adotadas pelo vistoriador;
-  `style_guide._regras()` injeta no prompt de toda vistoria e da revisão.
-  Fica no repositório PÚBLICO: só regra de redação, nunca dado de cliente.
-- **room_processor.py** — orquestra o processamento de um cômodo: lê as
-  fotos e chama `analisar_comodo`. Aceita `notas_extras` opcional
-  (informação confirmada sobre o imóvel, ex.: cor exata de tinta) que é
-  repassada até o prompt — ver `main.py --notas`.
-- **conferir.py** — CLI da conferência: monta as fotos em mosaico
-  (`image_utils.montar_mosaicos`), chama `gemini_client.conferir_comodo` e
-  grava as divergências como pendências de validação.
-- **report_writer.py** — grava o `.txt` de cada cômodo (dentro da própria
-  pasta de fotos) e o `.txt` consolidado do imóvel inteiro
-  (`Laudo_Vistoria_Completo.txt`, na raiz da pasta do imóvel).
-- **main.py** — ponto de entrada via CLI: percorre as subpastas de cômodo
-  do imóvel e junta tudo.
+Só dois arquivos conhecem o SDK do Gemini: `image_utils.py` (monta
+`types.Part`) e `gemini_client.py` (chama `generate_content`). Trocar de
+provedor mexe só neles.
 
-## Decisões importantes
+## Regras que não se quebram
 
-- Desde set/2026 o motor é o **Google Gemini**, não mais a Anthropic. Se
-  um dia precisar trocar de novo, os únicos arquivos acoplados ao SDK são
-  `image_utils.py` (monta `types.Part`) e `gemini_client.py` (chama
-  `client.models.generate_content`); o resto do projeto é agnóstico de
-  provedor.
-- **O projeto do Gemini TEM que ficar na camada paga** (faturamento ativo
-  desde 18/09/2026 — Nível 1, pré-pagamento). Motivo: os termos da camada
-  gratuita permitem que o Google use o conteúdo enviado para melhorar
-  produtos, com revisão humana, e pedem explicitamente para não enviar
-  informação pessoal ou confidencial — e este script envia fotos do
-  interior de imóveis de clientes (LGPD). Na camada paga, o Google não usa
-  prompts nem arquivos para isso. Custo medido: ~US$ 0,14 na maior
-  vistoria até agora (11 cômodos, 358 fotos, ~420 mil tokens de entrada) —
-  não vale voltar para a gratuita para economizar isso. Para conferir:
-  aistudio.google.com/projects, coluna "Nível de faturamento".
-- `gemini-3.5-flash-lite` é o padrão em `config.MODEL_NAME`. Foi escolhido
-  em 11/09/2026, ainda na camada gratuita, porque o `gemini-3.6-flash` tinha
-  cota de só 20 requisições/dia por projeto e estourou no meio de uma
-  vistoria. Na camada paga essa limitação some, mas o flash-lite continua
-  sendo o padrão: qualidade equivalente nos testes com dados reais e
-  entrada 5× mais barata (US$ 0,30 vs. US$ 1,50 por milhão de tokens). Se
-  trocar de modelo, rode um teste real de ponta a ponta, não só um
-  `models.list()`.
-- Toda chamada ao Gemini tem tempo limite de 5 min
-  (`TEMPO_LIMITE_CHAMADA_SEGUNDOS`) e tenta de novo, com espera crescente,
-  em `503` (sobrecarga do servidor) e em falha de rede/tempo limite
-  (`httpx.TransportError`). Sem o tempo limite, em 18/09/2026 uma conexão
-  pendurada pelo servidor travou o script por 10+ min sem erro nenhum.
-  Cota estourada (`429`) não tem nova tentativa automática — não adianta.
-- `main.py` isola falha por cômodo: se um cômodo der erro mesmo após as
-  tentativas, o script segue para o próximo e, no fim, mostra o comando
-  pronto com `--comodos` para refazer só os que falharam. As pendências
-  são gravadas a cada cômodo (não só no fim), para uma interrupção não
-  perder o trabalho feito; e o consolidado é montado de TODOS os
-  `_vistoria.txt` no disco, inclusive dos cômodos não reprocessados.
-- **Sistema de certeza (desde 18/09/2026):** cada item do laudo vem com
-  uma certeza 0–100 dada pelo próprio modelo; abaixo de
-  `config.LIMIAR_CERTEZA` (85) vira pendência para o vistoriador conferir.
-  O limiar fica SÓ no código, nunca no prompt — se o modelo souber o corte,
-  tende a responder logo acima dele. Os itens incertos continuam no laudo
-  (a lista é de conferência, não de exclusão).
-  **Limitação comprovada:** a certeza é autoavaliação, não probabilidade
-  medida. No primeiro teste real (Churrasqueira da R. Xavier), o modelo
-  deu ≥85% para TUDO — inclusive "Janela: Não se aplica.", quando a rodada
-  anterior do mesmo cômodo, com as mesmas fotos, tinha descrito uma janela
-  de correr. Erro confiante não é pego por esse sistema: ele serve de
-  triagem ("onde olhar primeiro"), não de garantia.
-- **Segunda olhada (desde 22/09/2026):** item com certeza até
-  `config.LIMIAR_CORRECAO_AUTOMATICA` (50) não vai direto para o
-  vistoriador — `_corrigir_itens_incertos` faz UMA chamada por cômodo, com
-  as mesmas fotos, focada só nesses itens e citando a dúvida que o próprio
-  modelo apontou; é o texto da segunda olhada que entra no laudo. Só roda
-  quando algum item sai lá embaixo (na R. Correia de Freitas foi 1 item em
-  14 cômodos), então não é "rodar tudo duas vezes" — o vistoriador
-  recusou dobrar o custo. A ideia é que o trabalho manual dele fique na
-  faixa do meio (de 50 a `LIMIAR_CERTEZA`): abaixo disso o modelo tenta
-  resolver sozinho, acima não é pendência. Item que continuar baixo depois
-  da segunda olhada VIRA pendência assim mesmo, com `MOTIVO_REANALISADO` —
-  laudo é documento assinado, afirmação duvidosa não passa calada.
-- **"Mais um/uma" é proibido** (pedido explícito do vistoriador, depois de
-  aparecer em 3 laudos seguidos apesar da regra antiga). Item repetido vira
-  UMA linha com a quantidade total ("*Duas portas..."), com "sendo um...
-  e outro..." se algum detalhe diferir. Como só a regra no prompt já tinha
-  falhado antes, há três camadas: (1) a regra ITENS REPETIDOS em
-  `REGRAS_GERAIS`; (2) se ainda assim aparecer, `_consolidar_repetidos` faz
-  UMA chamada de texto puro só para aquela categoria (fração de centavo,
-  só quando o modelo desobedece); (3) o que sobrar vira pendência de
-  certeza 0 com todas as linhas envolvidas. Vale na análise com fotos e no
-  `revisar.py`.
-  A detecção pega "Mais um/uma" (`linha_com_mais_um`) E o mesmo item em
-  linhas separadas sem "Mais" (`grupos_de_itens_repetidos`: linhas que
-  começam com quantidade + o mesmo substantivo). O segundo caso apareceu na
-  R. Leopoldo (8 placas em 4 linhas, 3 armários em 3 linhas) depois que o
-  "Mais um" sumiu. Posição/tamanho não fazem tipo diferente: armário
-  inferior e aéreo são "armários" (confirmado pelo vistoriador).
-  **Só "Mais um/uma" vira pendência** (camada 3) desde 22/09/2026: o
-  substantivo repetido continua disparando a correção automática (camada
-  2, onde o modelo julga com o texto na mão), mas o que sobrar dele fica
-  como está. A heurística de substantivo é palpite e errou na Cozinha da
-  R. Correia de Freitas, juntando "*Uma bancada em granito com cuba..."
-  com "*Uma bancada de apoio...", que são móveis diferentes — o
-  vistoriador decidiu "manter textos separados; apenas não colocar 'Mais
-  uma...'".
-  Os exemplos da regra usam [cor]/[n] de propósito: um exemplo tirado de
-  um imóvel real foi copiado palavra por palavra pelo modelo no teste.
-- **Testes:** só se escreve "testado" quando `--notas` confirma os testes
-  (o modelo não vê teste em foto). Com testes confirmados, todo item
-  elétrico e cada peça hidráulica levam "testado(s) e em funcionamento"
-  (pedido do vistoriador, 18/09/2026) — e NADA além disso. Na R. Correia
-  de Freitas (21/09/2026), com todos os testes confirmados nas notas, o
-  modelo espalhou a frase pelo laudo inteiro: "paredes testadas e em
-  funcionamento", "teto testado", "espelho testado". Por isso a regra no
-  prompt tem uma trava determinística junto:
-  `report_writer.limpar_testes_indevidos` tira a frase de paredes, piso,
-  teto, porta, janela e OBS, e da mobília sem função elétrica ou
-  hidráulica (armário, bancada, espelho, box, acessório). Roda dentro de
-  `_montar_categoria`, então vale para `main.py` e para `revisar.py`.
-- **Conferência (desde 22/09/2026):** depois do laudo escrito, `conferir.py`
-  olha as fotos de novo e aponta o que divergir. Roda sozinha no fim do
-  `main.py`. Três decisões de projeto, todas medidas:
-  1. **Em dois passos, e nessa ordem.** Mandar fotos + texto pronto junto e
-     pedir "aponte as divergências" devolveu lista VAZIA em dois cômodos
-     testados, um deles com o teto descrito como forro de PVC sendo laje
-     pintada: lendo o texto, o modelo concorda com o texto. Então o passo 1
-     é um INVENTÁRIO às cegas (o modelo lista o que vê, sem ver o laudo) e o
-     passo 2 compara inventário × laudo, em chamada de texto puro. Com isso
-     o mesmo cômodo devolveu 25 itens e 4 divergências reais.
-  2. **Fotos em mosaico.** O Gemini cobra por IMAGEM, não por pixel —
-     medido com `usage_metadata`: 1.101 tokens por foto, igual em 1568px e
-     em 256px. Diminuir resolução não economiza nada; juntar 4 fotos numa
-     folha de contato economiza 4× (`FOTOS_POR_MOSAICO_CONFERENCIA`). A
-     conferência inteira sai por ~1/4 de uma vistoria nova.
-  3. **Nada entra sozinho no laudo.** A conferência só gera pendência: item
-     faltando vira pendência `tipo="falta"`, em que a linha "Item" é uma
-     PROPOSTA e o OK do vistoriador acrescenta ao laudo (ver `validacao`).
-     Divergência de fato vira pendência normal com a sugestão já preenchida
-     em CORREÇÃO. A precisão medida foi de ~50-60%: boa para uma lista de
-     conferência, péssima para aplicar sem ler.
-  Travas contra o vício conhecido da conferência — usar o silêncio do
-  inventário como prova de ausência e encurtar o laudo: sugestão que remove
-  item, que vira "Não se aplica." ou que encolhe a linha em mais de 25% é
-  descartada, assim como a que se justifica com "o inventário não menciona"
-  (`_ARGUMENTO_DE_AUSENCIA`). Sem elas, ela propôs apagar a trinca e o
-  estufamento que o vistoriador tinha confirmado em campo.
-- Regra adotada via `validar.py` é regra GERAL (vale para todo imóvel).
-  Fato de um imóvel específico ("a cozinha não tem porta") se resolve com
-  CORRIGIR/REMOVER ou `--notas`, nunca como regra — senão o modelo passa a
-  achar que nenhuma cozinha tem porta.
-- Cada cômodo gera **apenas 1 chamada de API** (antes eram 8, uma por
-  categoria) — o modelo recebe todas as fotos do cômodo de uma vez e
-  devolve as 8 categorias num único JSON. Ao alterar o formato do prompt
-  ou o parsing da resposta, manter esse contrato de 1 chamada por cômodo.
-- Todo o texto de saída é em português, seguindo as regras de formatação
-  de `REGRAS_GERAIS` (item por linha começando com `*`, sem linha em
-  branco entre itens, padrão de frase fixo). Mudanças de estilo do laudo
-  devem ser feitas em `style_guide.py`, não espalhadas pelo resto do
-  código.
+Cada uma tem o porquê em "Decisões", abaixo.
+
+1. **Camada paga do Gemini, sempre.** A gratuita permite ao Google usar o
+   conteúdo com revisão humana, e isto envia fotos de interior de casa de
+   cliente (LGPD).
+2. **Limiar fica no código, nunca no prompt.** Modelo que sabe o corte
+   responde logo acima dele.
+3. **Nada entra sozinho no laudo.** Conferência, cobertura e conflito de escopo
+   só geram pendência. Laudo é documento assinado.
+4. **Estilo do laudo só muda em `style_guide.py`.** Item por linha começando
+   com `*`, sem linha em branco entre itens, padrão de frase fixo.
+5. **Motor clássico: 1 chamada de API por cômodo**, com todas as fotos e as 8
+   categorias num JSON só (eram 8 chamadas). Manter ao mexer em prompt ou
+   parsing.
+6. **"testado" só quando `--notas` confirma os testes**, e só em item elétrico
+   ou peça hidráulica. O modelo não vê teste em foto.
+7. **"Mais um/uma" é proibido.** Item repetido é UMA linha com o total
+   ("*Duas portas..."), com "sendo um... e outro..." se algo diferir.
+8. **`regras_validadas.txt` fica no repositório PÚBLICO**: só regra geral de
+   redação, nunca endereço, cliente ou fato de um imóvel. Fato de imóvel ("a
+   cozinha não tem porta") se resolve com CORRIGIR/REMOVER ou `--notas` —
+   como regra, o modelo passaria a achar que nenhuma cozinha tem porta.
+
+## Revisão antes de entregar um laudo
+
+O motor erra de formas repetidas. Antes de passar as pendências ao
+vistoriador, confira nas fotos — não no texto:
+
+- **Rodapé e roda-teto.** Os erros mais frequentes. Na R. Octavio de Carvalho
+  o laudo disse "sem rodapé" em dois cômodos que têm rodapé, e só achou a
+  moldura de gesso em um dos quatro cômodos que têm.
+- **Luminária.** O modelo tende a "luminária de embutir em LED". Na R.
+  Octavio eram plafons de sobrepor em todos os cômodos, e o laudo errou o tipo
+  em cinco deles.
+- **Banheiro.** Chuveiro, ducha higiênica, registros e ralo somem com
+  facilidade — a R. Octavio saiu com box e sem chuveiro.
+- **Categoria ou item grande faltando.** Na R. Octavio a Sala saiu sem Porta
+  com a porta de entrada nas fotos dela, e a churrasqueira sem parapeito,
+  ralo e condensadora de ar-condicionado. Cômodo sem Porta ou Janela merece
+  olhar.
+- **Escopo.** O espelho mostra outro cômodo e pode duplicar contagem.
+  Interruptor visto pelo espelho ou pela porta aberta pode ser do vizinho (o
+  do BWC da R. Octavio fica no corredor).
+- **Nota genérica do vistoriador não vale para todo cômodo.** "Paredes possuem
+  marcas e algumas paredes possuem furos" (R. Paulo Furtado Velasco) foi
+  aplicado a todas as paredes pintadas; só a Sala tinha marcas, e o BWC Suíte
+  nem é pintado. Confira cômodo a cômodo.
+- **A conferência acerta ~metade.** Recuse a sugestão que piora: acrescentar
+  pintura a parede toda revestida, trocar a redação sem corrigir fato,
+  duplicar item que já está em outra linha.
+
+**Semântica das decisões** (`core/validacao.aplicar_no_texto`), fácil de
+errar:
+
+| Pendência | OK | CORRIGIR | REMOVER |
+|---|---|---|---|
+| normal (a linha está no laudo) | mantém a linha | troca pela CORREÇÃO | **apaga a linha do laudo** |
+| `Tipo: falta` (proposta) | acrescenta o Item | acrescenta a CORREÇÃO | descarta a proposta |
+
+Para **recusar** a sugestão de uma pendência normal e manter o laudo, a
+decisão é **OK**, nunca REMOVER. Pendência sem DECISÃO fica aberta e não mexe
+no laudo. O `Item:` de pendência normal tem que bater ao caractere com a linha
+do `.txt` — copie da linha, não redigite.
+
+## Decisões e o porquê
+
+**Modelo e custo.** `gemini-3.5-flash-lite` (`config.MODEL_NAME`), escolhido em
+11/09/2026 quando o `gemini-3.6-flash` estourou a cota de 20 req/dia no meio
+de uma vistoria. Na camada paga a cota some, mas o flash-lite ficou:
+qualidade equivalente nos testes reais e entrada 5× mais barata (US$ 0,30 vs.
+1,50 por milhão de tokens). Trocar de modelo exige teste real de ponta a
+ponta, não só `models.list()`. Faturamento ativo desde 18/09/2026 (Nível 1,
+pré-pago); a maior vistoria custou ~US$ 0,14 (11 cômodos, 358 fotos). Conferir
+em aistudio.google.com/projects, coluna "Nível de faturamento".
+
+**O Gemini cobra por IMAGEM, não por pixel.** Medido com `usage_metadata`:
+1.101 tokens por foto, igual em 1568px e em 256px. Reduzir resolução não
+economiza nada; juntar fotos num mosaico economiza.
+
+**Resiliência.** Toda chamada tem limite de 5 min
+(`TEMPO_LIMITE_CHAMADA_SEGUNDOS`) — sem ele, em 18/09/2026 uma conexão
+pendurada travou o script 10+ min sem erro. Nova tentativa com espera
+crescente em `503` e `httpx.TransportError`; `429` não tenta de novo. O
+`main.py` isola falha por cômodo e no fim imprime o `--comodos` para refazer
+só os que falharam; pendências são gravadas a cada cômodo, e o consolidado é
+montado de todos os `_vistoria.txt` do disco.
+
+**Certeza (18/09/2026).** O modelo dá 0–100 por item; abaixo de
+`LIMIAR_CERTEZA` (85) vira pendência, e o item continua no laudo — a lista é
+de conferência, não de exclusão. **É autoavaliação, não probabilidade:** no
+primeiro teste real deu ≥85% para tudo, inclusive "Janela: Não se aplica."
+num cômodo onde a rodada anterior tinha visto uma janela de correr. Serve de
+triagem, não de garantia. O `response_schema` pede `{texto, motivo, certeza}`
+nessa ordem: o modelo escreve, diz o que duvida, e só então dá a nota.
+
+**Segunda olhada (22/09/2026).** Item com certeza ≤
+`LIMIAR_CORRECAO_AUTOMATICA` (50) ganha UMA chamada extra por cômodo
+(`_corrigir_itens_incertos`), com as mesmas fotos e citando a dúvida do
+próprio modelo. Só roda quando algo sai lá embaixo — o vistoriador recusou
+dobrar o custo rodando tudo duas vezes. A faixa 50–85 é o trabalho manual
+dele. O que continuar baixo vira pendência com `MOTIVO_REANALISADO`.
+
+**"Mais um/uma" em três camadas**, porque só a regra no prompt já tinha
+falhado em 3 laudos seguidos: (1) regra ITENS REPETIDOS em `REGRAS_GERAIS`;
+(2) se aparecer, `_consolidar_repetidos` faz uma chamada de texto puro só
+naquela categoria; (3) o que sobrar vira pendência de certeza 0. A detecção
+pega "Mais um" (`linha_com_mais_um`) e o mesmo substantivo em linhas
+separadas (`grupos_de_itens_repetidos` — na R. Leopoldo, 8 placas em 4
+linhas). Só "Mais um" vira pendência: a heurística de substantivo errou na
+R. Correia de Freitas juntando duas bancadas diferentes, e o vistoriador
+decidiu manter linhas separadas nesse caso. Posição e tamanho não fazem tipo
+diferente — armário inferior e aéreo são "armários". Os exemplos da regra
+usam `[cor]`/`[n]` porque um exemplo tirado de imóvel real foi copiado
+palavra por palavra.
+
+**Trava de "testado".** Com testes confirmados, todo item elétrico e cada
+peça hidráulica levam "testado(s) e em funcionamento" (pedido do vistoriador,
+18/09/2026). Na R. Correia de Freitas o modelo espalhou a frase por paredes,
+teto e espelho, então há trava determinística:
+`report_writer.limpar_testes_indevidos` tira a frase de paredes, piso, teto,
+porta, janela, OBS e da mobília sem função elétrica ou hidráulica. Roda em
+`_montar_categoria`, logo vale no `main.py` e no `revisar.py`.
+
+**Conferência (22/09/2026)**, três decisões medidas:
+1. **Dois passos.** Fotos + laudo pronto juntos devolveram lista VAZIA — lendo
+   o texto, o modelo concorda com o texto (aceitou "forro de PVC" numa laje
+   pintada). Passo 1 é inventário às cegas; passo 2 compara inventário ×
+   laudo em texto puro. O mesmo cômodo passou a dar 4 divergências reais.
+2. **Mosaico** de 4 fotos por imagem (`FOTOS_POR_MOSAICO_CONFERENCIA`): a
+   conferência inteira custa ~1/4 de uma vistoria.
+3. **Só gera pendência**, precisão medida de ~50–60%. Item faltando vira
+   `tipo="falta"`; divergência vira pendência com a sugestão em CORREÇÃO.
+
+Travas contra o vício de usar o silêncio do inventário como prova de
+ausência: é descartada a sugestão que remove item, que vira "Não se aplica.",
+que encolhe a linha mais de 25% ou que se justifica com "o inventário não
+menciona" (`_ARGUMENTO_DE_AUSENCIA`). Sem elas, ela propôs apagar trinca e
+estufamento confirmados em campo.
+
+**Evidências e escopo (25/09/2026)** — o motivo da evolução arquitetural.
+Foto na pasta "Cozinha" não prova que o que aparece nela é da cozinha: pela
+porta se vê o corredor, o espelho reflete o quarto. Escrever mais parágrafos
+no prompt já tinha falhado; o pertencimento virou variável do sistema:
+
+    FOTO -> ANÁLISE -> EVIDÊNCIAS -> ESCOPO -> TAXONOMIA -> COBERTURA
+         -> CONSOLIDAÇÃO -> LAUDO -> CONFERÊNCIA -> VALIDAÇÃO HUMANA
+
+O **modelo** diz o que vê e dá duas confianças independentes por evidência:
+percepção ("está claro?") e escopo ("é deste cômodo?") — uma parede de
+corredor pode estar nítida na foto da cozinha (99 e 10). O **código**
+(`evidencias.validar_escopo`) decide sem depender de obediência:
+- reflexo e ambiente adjacente são descartados — fato categórico, não grau;
+- escopo abaixo de `PISO_CONFIANCA_ESCOPO` (70) não vira texto;
+- corroboração entre fotos sobe a percepção, **nunca** o escopo;
+- contradição não é votação (a foto isolada pode ser a certa — a parede
+  vermelha em textura da R. Correia de Freitas): vira conflito com os dois
+  lados, para o vistoriador;
+- sem evidência aprovada, o cômodo não é escrito.
+
+A redação recebe só as evidências aprovadas, **sem as fotos**: com as imagens
+na mão o modelo volta a descrever o que acabou de ser descartado. Nenhuma
+foto é apagada; conflito vira pendência `scope_conflict`.
+
+**V2 (25/09/2026).** Benchmark da V1 com 107 fotos reais (BWC Suíte + Quarto
+Suíte): acertou mais fatos que o clássico (um split inteiro, bacia de válvula
+de parede que o clássico chamou de caixa acoplada, banheira de
+hidromassagem) e entregou laudo pior em três pontos, corrigidos por código:
+1. **Fronteira.** Soleira, peitoril, batente, vistas, esquadria e
+   porta-janela mostram o outro lado, e o modelo os marcava como adjacentes —
+   sumiram a soleira do BWC e a Janela inteira do Quarto. Agora existe
+   `Escopo.FRONTEIRA` e `taxonomia.e_elemento_de_fronteira` promove. A peça é
+   do cômodo; o cenário através dela não é.
+2. **Categoria.** O modelo propõe, `taxonomia.categoria_canonica` decide:
+   soleira → Porta, peitoril → Janela, box → Mobília, porta-papel/ganchos/
+   toalheiro → Mobília.
+3. **Cobertura.** Porta-papel, ganchos e toalheiro sumiram sem reclamação.
+   `cobertura.py` checa por tipo de cômodo; o que faltar vira busca dirigida
+   nas mesmas fotos (máx. 3 por cômodo) e, se persistir, pendência — dúvida,
+   nunca "não existe".
+
+Também: contradição é por **atributo** (cerâmica branca e rejunte cinza não
+competem), rodapé tem três estados (presente / ausente / não visível), e em
+componentes elétricos importa a composição, não a contagem de placas.
+
+**Placas elétricas sem número, em todos os motores (29/09/2026).** O que a
+V2 fazia virou regra do vistoriador: "*Placas em polímero na cor [cor],
+sendo tomadas, interruptores e placas cegas, em bom estado." — só os tipos
+que existem no cômodo, singular quando há um só. Mora em três lugares que
+têm que concordar: o bloco "Tomadas/interruptores" do `style_guide.py`, a
+exceção em ITENS REPETIDOS (que senão mandaria juntar "com a quantidade
+total") e `regras_validadas.txt`. `test_placas_eletricas_sem_quantidade_no_prompt`
+barra a volta de exemplo contado — o modelo copia exemplo mais do que obedece
+regra.
+
+**A V2 reprovou no primeiro teste real, registrado de propósito**: 220
+pendências no BWC e 365 no Quarto. Conflito era emitido por PAR (40
+evidências de parede = 780 pares), e o redator lia uma evidência por foto
+como um objeto — o mesmo chuveiro em duas fotos virou "dois chuveiros".
+Agregar conflito por (categoria, atributo) e agrupar objetos
+(`evidencias.agrupar_objetos`) baixou para 26 e 22. O agrupamento exige que o
+**substantivo-núcleo** bata: com material e cor no critério, "porta-papel em
+metal cromado" e "chuveiro em metal cromado" viravam um objeto só — sumir
+item é pior que contar duas vezes.
+
+**Três motores convivem, e isso não é indecisão.** O clássico gerou todas as
+vistorias reais e é o padrão do CLI; a V1 fica para comparação; a V2 é o
+padrão na web. A V2 custa ~3× (US$ 0,10 contra 0,035 nas 107 fotos),
+detalha menos mobília planejada e ainda gera pendência demais. Não substitui
+o clássico enquanto o `benchmark.py` não provar em mais imóveis — de
+preferência com cozinha e área de serviço, onde ela é mais fraca.
+
+**Rastreabilidade no banco:** `Foto -> Evidencia -> ItemLaudo -> Pendencia`.
+A pendência aponta o item por ID; no `.txt` ela é achada pelo texto exato e
+se perde se alguém reescrever a linha.
+
+**Regras em produção vivem no banco**, não no repositório: várias
+instalações não podem sobrescrever umas às outras, e o repositório é público.
+`regras_validadas.txt` é só o conjunto inicial, semeado na primeira subida.
+Regra nova vale por adoção explícita, nunca porque "o sistema aprendeu".

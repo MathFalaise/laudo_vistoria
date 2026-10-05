@@ -21,3 +21,9 @@
 
 # adotadas em 22/09/2026
 - O vaso sanitário (bacia sanitária, com ou sem caixa acoplada) entra SEMPRE na categoria Mobília do banheiro, BWC, suíte ou lavabo — nunca em OBS, nunca em Componentes Elétricos, nunca em outra categoria.
+
+# adotadas em 29/09/2026
+- Quando as informações confirmadas disserem que a pintura é nova, escreva "com pintura nova" na linha de cada parede pintada e de cada teto a que a informação se aplica, em todos os cômodos — não só em um.
+
+# adotadas em 29/09/2026
+- Placas elétricas não levam quantidade — nem o total de placas, nem quantas de cada tipo. Escreva uma linha só, citando os tipos presentes no cômodo, como em "*Placas em polímero na cor [cor], sendo tomadas, interruptores, placas cegas e placas para saída de fios, em bom estado." Cite só os tipos que existem naquele cômodo.

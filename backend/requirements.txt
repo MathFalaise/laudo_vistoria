@@ -1,0 +1,17 @@
+# API
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic>=2.7
+
+# Banco
+SQLAlchemy>=2.0
+alembic>=1.13
+
+# Motor (core/) — as mesmas do CLI
+google-genai>=1.0.0
+Pillow>=10.0.0
+httpx>=0.28
+
+# HEIC: a foto padrão do iPhone. Sem isto o upload de .heic é recusado.
+pillow-heif>=0.16
