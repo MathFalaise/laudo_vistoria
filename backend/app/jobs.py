@@ -91,6 +91,7 @@ def _proximo_job(sessao) -> Job | None:
 
 def _executar_job(sessao, job: Job) -> None:
     from core.gemini_client import criar_cliente
+    from core.providers import provedor_validador
 
     job.estado = EstadoJob.PROCESSANDO
     job.iniciado_em = agora()
@@ -103,6 +104,9 @@ def _executar_job(sessao, job: Job) -> None:
 
     try:
         cliente = criar_cliente()
+        # Validação visual: ligada por VALIDATION_ENABLED. Configuração errada
+        # (sem chave, sem modelo) falha o job AQUI, antes de gastar uma foto.
+        validador = provedor_validador() if job.usar_evidencias else None
     except Exception as erro:
         job.estado = EstadoJob.FALHOU
         job.erro = str(erro)
@@ -145,6 +149,7 @@ def _executar_job(sessao, job: Job) -> None:
             processar_comodo_persistindo(
                 sessao, comodo, cliente,
                 usar_evidencias=job.usar_evidencias, progresso=progresso,
+                validador=validador, job_id=job.id,
             )
         except Exception as erro:
             # Isolamento por cômodo, igual ao CLI: um cômodo problemático não
