@@ -1,15 +1,18 @@
 """
 Utilitários para localizar, redimensionar e codificar as fotos de cada
-cômodo antes de enviar para a API do Gemini.
+cômodo antes de enviar ao modelo.
+
+As imagens saem como `core.providers.Imagem` (bytes + tipo), sem nenhum objeto
+de SDK: cada provedor converte para o formato dele na hora de enviar.
 """
 
 import io
 import os
 
-from google.genai import types
 from PIL import Image
 
 from core.config import EXTENSOES_IMAGEM, TAMANHO_MAX_IMAGEM
+from core.providers.base import Imagem
 
 
 def listar_fotos(pasta_comodo: str) -> list:
@@ -23,9 +26,9 @@ def listar_fotos(pasta_comodo: str) -> list:
     return arquivos
 
 
-def codificar_imagem(caminho: str) -> types.Part:
-    """Abre, redimensiona (se necessário) e converte uma imagem em um
-    Part pronto para entrar no 'contents' de uma mensagem da API do Gemini."""
+def codificar_imagem(caminho: str) -> Imagem:
+    """Abre, redimensiona (se necessário) e converte uma imagem em JPEG,
+    pronta para qualquer provedor."""
     with Image.open(caminho) as img:
         img = img.convert("RGB")
 
@@ -39,7 +42,7 @@ def codificar_imagem(caminho: str) -> types.Part:
         img.save(buffer, format="JPEG", quality=85)
         dados_bytes = buffer.getvalue()
 
-    return types.Part.from_bytes(data=dados_bytes, mime_type="image/jpeg")
+    return Imagem(dados=dados_bytes, mime="image/jpeg")
 
 
 def codificar_fotos_comodo(pasta_comodo: str) -> list:
@@ -85,7 +88,7 @@ def montar_mosaicos(caminhos: list, fotos_por_mosaico: int) -> list:
                 )
         buffer = io.BytesIO()
         folha.save(buffer, format="JPEG", quality=85)
-        mosaicos.append(types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg"))
+        mosaicos.append(Imagem(dados=buffer.getvalue(), mime="image/jpeg"))
     return mosaicos
 
 

@@ -89,6 +89,38 @@ FOTOS_POR_LOTE_ESCOPO = 10
 # (acessorios de parede, esquadrias, eletricos) sem dobrar o custo do comodo.
 MAX_SEGUNDAS_OLHADAS_DIRIGIDAS = 3
 
+# --------------------------------------------------------------------------
+# PROVEDORES E VALIDAÇÃO VISUAL (desde 05/10/2026) — ver core/providers e
+# core/validacao_visual.py. Quem é chamado vem do ambiente (VISION_PROVIDER,
+# VALIDATOR_PROVIDER, VALIDATION_ENABLED; ver .env.example); os LIMIARES ficam
+# aqui, no código, nunca no prompt — mesma razão de LIMIAR_CERTEZA.
+# --------------------------------------------------------------------------
+
+# Evidência aceita pelo escopo com confiança final ABAIXO disto vai ao
+# validador. Mesmo número de LIMIAR_CERTEZA: é a faixa que o vistoriador já
+# conferia à mão.
+LIMIAR_VALIDACAO = LIMIAR_CERTEZA
+
+# Teto de evidências validadas por cômodo (custo). Passando disso, vão as de
+# MENOR confiança; as outras seguem como o escopo decidiu, marcadas
+# "nao_validada_limite" — nunca como aprovadas.
+MAX_EVIDENCIAS_VALIDADAS_POR_COMODO = 30
+
+# Reanálises dirigidas que o validador pode pedir POR EVIDÊNCIA. Um ciclo só:
+# validador -> analista -> validador. Mais que isso vira laço caro, e o que
+# continua duvidoso depois de duas olhadas é trabalho do vistoriador.
+MAX_REANALISES = 1
+
+# Preço em US$ por milhão de tokens (entrada, saída), para a telemetria
+# estimar o custo de cada chamada. Só entra preço com fonte:
+# - glm-5.3-flash: opencode.ai/docs/zen, consultado em 05/10/2026.
+# Gemini e Claude ficam de fora porque o preço de saída do modelo em uso não
+# está registrado no projeto; acrescente com LAUDO_PRECOS_MODELOS (JSON
+# {"modelo": [entrada, saida]}) em vez de adivinhar.
+PRECOS_POR_MILHAO = {
+    "glm-5.3-flash": (0.15, 0.50),
+}
+
 # Extensões de imagem aceitas dentro das pastas de cômodo
 EXTENSOES_IMAGEM = (".jpg", ".jpeg", ".png", ".heic")
 
