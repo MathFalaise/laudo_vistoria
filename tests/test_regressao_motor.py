@@ -50,6 +50,17 @@ def test_limiares_nao_aparecem_no_prompt():
         assert f"{limiar}%" not in prompt
 
 
+def test_placas_eletricas_sem_quantidade_no_prompt():
+    """Regra do vistoriador (29/09/2026): placa elétrica não leva número, só
+    os tipos. O prompt não pode trazer exemplo contado — o modelo copia o
+    exemplo mais do que obedece à regra."""
+    prompt = style_guide.montar_prompt_comodo("Cozinha", config.CATEGORIAS)
+    assert "SEM quantidade" in prompt
+    assert "Placas em polímero na cor [cor], sendo tomadas" in prompt
+    for contado in ("Cinco placas", "Três placas", "duas com uma tomada"):
+        assert contado not in prompt
+
+
 # --------------------------------------------------------------------------
 # Formatação do item
 # --------------------------------------------------------------------------

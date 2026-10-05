@@ -74,6 +74,8 @@ regras de formatação:
     tomada, de interruptor e placa cega são todas "placas". Ex.: "*Dois
     armários em MDF na cor [cor], sendo um inferior com [n] portas e
     outro aéreo com [n] portas, em bom estado."
+  - Exceção: placas elétricas também ficam numa linha só, mas SEM número
+    (ver "Tomadas/interruptores" em Componentes Elétricos).
   - Itens de tipos DIFERENTES (ex.: bancada e tanque) ficam em linhas
     separadas, cada uma começando com "Um/Uma" ou com a quantidade.
 - TESTES: só escreva que algo foi "testado" se as informações confirmadas
@@ -82,7 +84,7 @@ regras de formatação:
   confirmarem os testes ELÉTRICOS, todo item de Componentes Elétricos
   (pontos de iluminação, placas, quadro de disjuntores) leva "testado(s)
   e em funcionamento" antes de "em bom estado", com a concordância certa
-  ("*Três placas ..., testadas e em funcionamento, em bom estado.").
+  ("*Placas em polímero ..., testadas e em funcionamento, em bom estado.").
   Quando confirmarem os testes HIDRÁULICOS, faça o mesmo com cada peça
   hidráulica (torneira, misturador, chuveiro, ducha, ducha higiênica,
   descarga, registro), logo depois da peça dentro da linha:
@@ -194,11 +196,15 @@ Descreva os componentes elétricos visíveis do cômodo:
   branca, em bom estado."), mesmo que as luminárias sejam de tipos
   diferentes ("...sendo duas de embutir e uma pendente...").
 - Tomadas/interruptores: TODAS as placas do cômodo numa ÚNICA linha, como
-  "placas em polímero na cor [cor]", com a quantidade total e a função de
-  cada uma (interruptores, tomadas, placas cegas, placas para saída de
-  fios de internet/TV, etc.) — ex.: "*Cinco placas em polímero na cor
-  branca, sendo duas com uma tomada, uma com um interruptor triplo e duas
-  placas cegas, em bom estado." Não use o termo "espelhos" para as placas.
+  "placas em polímero na cor [cor]", SEM quantidade — nem o total de
+  placas, nem quantas de cada tipo (regra do vistoriador, 29/09/2026: a
+  contagem de placas quase sempre sai errada). Cite só os tipos que
+  existem no cômodo (tomadas, interruptores, placas cegas, placas para
+  saída de fios, tomada de telefone/rede, etc.) — ex.: "*Placas em
+  polímero na cor [cor], sendo tomadas, interruptores e placas cegas, em
+  bom estado." Use o singular quando o cômodo tiver um só daquele tipo
+  ("sendo tomadas e interruptor"). Não use o termo "espelhos" para as
+  placas.
 - Disjuntores/quadro de disjuntores, se visíveis (sobre dizer que foram
   testados, siga a regra TESTES acima).
 - Estado de conservação geral dos itens acima.
@@ -637,7 +643,10 @@ def montar_prompt_consolidacao(rotulo_categoria: str, texto_categoria: str) -> s
         "a quantidade total no plural (e \"sendo um/uma ... e outro/outra "
         '..." se algum detalhe for diferente entre eles). Posição, tamanho '
         "ou função não fazem um tipo diferente (armário inferior e superior "
-        "são armários; placa de tomada e placa cega são placas).\n"
+        "são armários; placa de tomada e placa cega são placas). Placas "
+        "elétricas são exceção: uma linha só, mas SEM número, citando só os "
+        "tipos (\"Placas em polímero na cor [cor], sendo tomadas e "
+        "interruptores\").\n"
         '- Se a linha com "Mais um/uma" descreve um item de tipo DIFERENTE '
         'da linha anterior, apenas troque o começo por "Um/Uma".\n'
         "- Não invente, não remova e não altere nenhum fato (material, cor, "
@@ -1115,12 +1124,12 @@ def montar_prompt_consolidacao_v2(
             "Os tipos encontrados neste cômodo foram: "
             + ", ".join(tipos_eletricos) + ".\n"
             "O que importa aqui é NOMEAR OS TIPOS e a composição, não contar "
-            "unidades. NÃO é obrigatório escrever \"sete placas\", \"duas "
-            "tomadas\" ou \"três interruptores\": a contagem de placas quase "
-            "sempre sai errada e deixa a frase pior. Prefira a composição, no "
-            "espírito de \"com placas em polímero na cor branca, sendo "
-            "tomadas, interruptores e placa cega\" — sem copiar esse exemplo "
-            "ao pé da letra.\n"
+            "unidades. NÃO escreva quantidade de placas — nem \"sete placas\", "
+            "nem \"duas tomadas\", nem \"três interruptores\" (regra do "
+            "vistoriador): a contagem de placas quase sempre sai errada e "
+            "deixa a frase pior. Escreva a composição, no espírito de "
+            "\"Placas em polímero na cor branca, sendo tomadas, interruptores "
+            "e placa cega\" — sem copiar esse exemplo ao pé da letra.\n"
             "Só escreva quantidade de item elétrico quando ela estiver "
             "claramente determinada E for realmente útil (por exemplo, o "
             "número de pontos de iluminação do teto).\n"

@@ -288,7 +288,7 @@ def test_a_redacao_recebe_os_tipos_eletricos_e_a_regra_de_composicao(pasta):
                   if c["etapa"] == "consolidacao")
     assert "tomada" in prompt and "interruptor" in prompt
     assert "placa cega" in prompt and "saída de dados" in prompt
-    assert "NÃO é obrigatório escrever" in prompt
+    assert "NÃO escreva quantidade de placas" in prompt
     assert "CONFIGURAÇÕES da peça, não quantidade de placas" in prompt
 
 
@@ -309,7 +309,7 @@ def test_instancias_sao_preservadas_internamente(pasta):
     resultado = pipeline.processar_comodo_v2(cliente, pasta, "BWC Suíte")
     eletricas = [e for e in resultado.evidencias if e.categoria == "eletrico"]
     assert sorted(e.instancia for e in eletricas) == [1, 2, 3, 4]
-    # e o texto não é obrigado a dizer "quatro placas"
+    # e o texto não diz "quatro placas" (regra do vistoriador, 29/09/2026)
     assert "quatro" not in resultado.dados["eletrico"].lower()
 
 
