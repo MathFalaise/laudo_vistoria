@@ -22,7 +22,7 @@ from app.models import (Comodo, CorrecaoHumana, EstadoComodo, Evidencia,
                         HistoricoItem, ItemLaudo, Pendencia, Regra,
                         TipoPendencia, Vistoria, agora)
 from core.config import CATEGORIAS, LIMIAR_CERTEZA, ROTULOS_CATEGORIA
-from core.pipeline import PREFIXO_CONFLITO, processar_comodo
+from core.pipeline import prefixo_do_conflito, processar_comodo
 from core.report_writer import (TEXTO_NAO_SE_APLICA, TEXTO_SEM_OBSERVACOES,
                                 montar_texto_comodo, normalizar_linha,
                                 texto_vazio_da_categoria)
@@ -275,7 +275,7 @@ def _gravar_pendencias(sessao: Session, comodo: Comodo, resultado,
             comodo_id=comodo.id,
             categoria=conflito.categoria,
             tipo=TipoPendencia.CONFLITO_ESCOPO,
-            motivo=f"{PREFIXO_CONFLITO}. {conflito.resumo}",
+            motivo=f"{prefixo_do_conflito(conflito)}. {conflito.resumo}",
             certeza=0,
             texto_proposto="",
             # Traduz os ids do motor para os do banco: é o que faz a tela de

@@ -4,6 +4,7 @@ PIPELINE do cômodo — a orquestração que o CLI e a API web compartilham.
     FOTOS
       -> ANÁLISE DA FOTO (modelo: escopo + evidências cruas)
       -> VALIDAÇÃO DE ESCOPO (código: determinística, em core.evidencias)
+      -> VALIDAÇÃO VISUAL SELETIVA (só V2, opcional: core.validacao_visual)
       -> CONSOLIDAÇÃO (modelo: escreve o laudo só com o que passou)
       -> TRAVAS DO MOTOR ANTIGO (repetidos, segunda olhada, testes indevidos)
       -> LAUDO + PENDÊNCIAS
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from core import telemetria
 from core.config import CATEGORIAS, FOTOS_POR_LOTE_ESCOPO
 from core.evidencias import (
     AnaliseFoto,
@@ -45,6 +47,15 @@ from core.image_utils import codificar_imagem, listar_fotos
 # lê primeiro no arquivo, e ele precisa saber de cara que aquilo NÃO está no
 # laudo — ao contrário das pendências de certeza, que estão.
 PREFIXO_CONFLITO = "CONFLITO DE ESCOPO — não entrou no laudo"
+
+# Pendência do veto do validador visual: o item também NÃO está no laudo, mas
+# o motivo é outro, e o vistoriador precisa saber qual.
+PREFIXO_VALIDACAO = "VALIDAÇÃO VISUAL — não entrou no laudo"
+
+
+def prefixo_do_conflito(conflito) -> str:
+    from core.evidencias import TipoConflito
+    return PREFIXO_VALIDACAO if conflito.tipo is TipoConflito.VALIDACAO else PREFIXO_CONFLITO
 
 TIPO_CONFLITO_ESCOPO = "scope_conflict"
 
@@ -75,6 +86,10 @@ class ResultadoComodo:
     fotos_utilizaveis: int = 0
     fotos_totais: int = 0
     cobertura_incompleta: bool = False
+    # Relatório da validação visual (None = não houve) e uma linha de
+    # telemetria por chamada a modelo feita para este cômodo.
+    validacao: dict | None = None
+    chamadas: list = field(default_factory=list)
 
     def evidencias_aceitas(self) -> list:
         return [e for e in self.evidencias if e.aceita]
@@ -96,6 +111,9 @@ class ResultadoComodo:
                 for foto_id, analise in self.analises.items()
             },
             "evidencias": [evidencia.para_dict() for evidencia in self.evidencias],
+            "validacao": self.validacao,
+            "chamadas": list(self.chamadas),
+            "custos": telemetria.resumir(self.chamadas),
             "conflitos": [
                 {
                     "categoria": conflito.categoria,
@@ -130,7 +148,7 @@ def conflitos_para_pendencias(nome_comodo: str, conflitos: list) -> list:
             "texto": conflito.resumo,
             "certeza": 0,
             "motivo": (
-                f"{PREFIXO_CONFLITO}. Fotos envolvidas: "
+                f"{prefixo_do_conflito(conflito)}. Fotos envolvidas: "
                 f"{', '.join(conflito.fotos) or '(não identificadas)'}. "
                 "Se isto pertence a este cômodo, use CORRIGIR e escreva a "
                 "linha do laudo; se pertence a outro ambiente, use REMOVER."
@@ -284,31 +302,46 @@ def processar_comodo(
     progresso=None,
     caminhos: list | None = None,
     motor: str | None = None,
+    validador=None,
 ) -> ResultadoComodo:
     """Ponto de entrada único. Escolhe o motor e devolve sempre a mesma coisa.
 
     É por aqui que passam o CLI e a API web — não existe um caminho para cada
     (regra 30). A diferença entre os dois é só de onde vêm as fotos e para
-    onde vai o resultado."""
+    onde vai o resultado.
+
+    `validador`: provedor da validação visual seletiva (ver
+    core/validacao_visual.py), ou None. Quem chama decide — em geral por
+    `core.providers.provedor_validador()`, que lê VALIDATION_ENABLED. Só a V2
+    tem evidências para validar; nos outros motores ele é ignorado."""
     from core.config import USAR_MOTOR_DE_EVIDENCIAS
 
     if usar_evidencias is None:
         usar_evidencias = USAR_MOTOR_DE_EVIDENCIAS
     if motor is None:
         motor = MOTOR_V2 if usar_evidencias else MOTOR_CLASSICO
-    if motor == MOTOR_V2:
-        return processar_comodo_v2(
-            cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
-            progresso, caminhos,
-        )
-    if motor == MOTOR_V1:
-        return processar_comodo_evidencias(
-            cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
-            progresso, caminhos,
-        )
-    return processar_comodo_classico(
-        cliente, pasta_comodo, nome_comodo, notas_extras, caminhos
-    )
+    if validador is not None and motor != MOTOR_V2:
+        print(f"  Validação visual ignorada em '{nome_comodo}': ela só existe no motor "
+              f"{MOTOR_V2}.", flush=True)
+
+    with telemetria.coletar() as chamadas, telemetria.contexto(comodo=nome_comodo, motor=motor):
+        if motor == MOTOR_V2:
+            resultado = processar_comodo_v2(
+                cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
+                progresso, caminhos, validador=validador,
+            )
+        elif motor == MOTOR_V1:
+            resultado = processar_comodo_evidencias(
+                cliente, pasta_comodo, nome_comodo, notas_extras, ids_fotos,
+                progresso, caminhos,
+            )
+        else:
+            resultado = processar_comodo_classico(
+                cliente, pasta_comodo, nome_comodo, notas_extras, caminhos
+            )
+    if isinstance(resultado, ResultadoComodo):
+        resultado.chamadas = chamadas
+    return resultado
 
 
 # ==========================================================================
@@ -323,9 +356,15 @@ def processar_comodo_v2(
     ids_fotos: list | None = None,
     progresso=None,
     caminhos: list | None = None,
+    validador=None,
 ) -> ResultadoComodo:
     """FOTOS -> EVIDÊNCIAS EXAUSTIVAS -> ESCOPO -> FRONTEIRA -> TAXONOMIA
-    -> COBERTURA -> CONSOLIDAÇÃO -> LAUDO.
+    -> COBERTURA -> [VALIDAÇÃO VISUAL] -> CONSOLIDAÇÃO -> LAUDO.
+
+    Com `validador`, as evidências que a política escolher (core/config.py)
+    passam pela validação visual seletiva DEPOIS do escopo e da busca
+    dirigida; o escopo é revalidado em seguida e só então se escreve. Sem
+    ele, o caminho é exatamente o de antes.
 
     A diferença prática em relação à V1, medida no benchmark de 107 fotos:
 
@@ -348,6 +387,7 @@ def processar_comodo_v2(
     from core.gemini_client import (analisar_escopo_e_evidencias_v2,
                                     consolidar_evidencias_v2,
                                     segunda_olhada_dirigida)
+    from core.providers import como_provedor
     from core.taxonomia import estado_do_rodape
 
     caminhos = _caminhos_das_fotos(pasta_comodo, caminhos)
@@ -417,6 +457,33 @@ def processar_comodo_v2(
             progresso(f"a busca dirigida achou {achadas_na_segunda} evidência(s); "
                       f"restam {len(lacunas)} lacuna(s)")
 
+    # Rastreabilidade: quem viu cada evidência.
+    analista = como_provedor(cliente)
+    for evidencia in evidencias:
+        evidencia.origem = evidencia.origem or f"{analista.nome}:{analista.modelo}"
+
+    # --- validação visual seletiva (opcional) ------------------------------
+    relatorio_validacao = None
+    if validador is not None:
+        from core.validacao_visual import validar_evidencias
+
+        relatorio_validacao = validar_evidencias(
+            validador, cliente, resultado_escopo.aceitas, analises,
+            dict(zip(identificadores, blocos_todos)), nome_comodo, notas_extras,
+            progresso=progresso,
+        )
+        if relatorio_validacao.alterou:
+            # O veto e as correções só valem depois de passar de novo pelo
+            # código: é validar_escopo quem descarta, nunca o validador.
+            resultado_escopo = validar_escopo(evidencias, analises, nome_comodo)
+            lacunas = encontrar_lacunas(nome_comodo, resultado_escopo.aceitas)
+        if progresso:
+            r = relatorio_validacao
+            progresso(f"validação visual: {r.selecionadas} evidência(s) conferida(s), "
+                      f"{r.aprovadas} aprovada(s), {r.rejeitadas} rejeitada(s), "
+                      f"{r.corrigidas} corrigida(s), {r.reanalisadas} reanalisada(s), "
+                      f"{r.falhas} falha(s)")
+
     # --- rodapé: três estados, decididos por código ------------------------
     observacoes_de_superficie = [
         e.observacao for e in resultado_escopo.aceitas
@@ -466,4 +533,5 @@ def processar_comodo_v2(
         fotos_utilizaveis=resultado_escopo.fotos_utilizaveis,
         fotos_totais=resultado_escopo.fotos_totais,
         cobertura_incompleta=resultado_escopo.cobertura_incompleta,
+        validacao=relatorio_validacao.para_dict() if relatorio_validacao else None,
     )

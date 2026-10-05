@@ -1187,3 +1187,117 @@ def montar_prompt_consolidacao_v2(
         'começando com "*", ou exatamente "Não se aplica." / "Sem '
         'observações."), "motivo" e "certeza".'
     )
+
+
+# ==========================================================================
+# VALIDAÇÃO VISUAL E REANÁLISE DIRIGIDA (desde 05/10/2026)
+#
+# Dois prompts que NÃO escrevem laudo. O validador olha a foto e diz se a
+# evidência do analista se sustenta; o analista, quando o validador pede,
+# olha de novo só o ponto em dúvida. Quem decide o que vira texto continua
+# sendo o código (core/evidencias.validar_escopo) e quem escreve continua
+# sendo a redação de sempre. Os limiares que escolhem o que vai à validação
+# ficam em core/config.py — nunca aqui.
+# ==========================================================================
+
+def _bloco_fatos_confirmados(notas_extras: str) -> str:
+    if not notas_extras.strip():
+        return ""
+    return (
+        "FATOS CONFIRMADOS EM CAMPO pelo vistoriador (valem mais que a foto e "
+        "que qualquer modelo; não os contrarie):\n"
+        f"{notas_extras.strip()}\n\n"
+    )
+
+
+def montar_prompt_validacao_visual(
+    nome_comodo: str, evidencias: list, analise_foto: dict, notas_extras: str = "",
+) -> str:
+    """Validação visual de evidências de UMA foto.
+
+    `evidencias`: [{"id", "categoria", "observacao", "atributos", "escopo"}].
+    `analise_foto`: {"escopo", "motivo"} — o que a análise disse da foto.
+
+    O validador recebe a FOTO junto: validar só o texto do analista seria
+    concordar com o texto (foi exatamente o que a conferência fazia antes de
+    virar inventário às cegas, 22/09/2026)."""
+    linhas = []
+    for evidencia in evidencias:
+        atributos = ", ".join(f"{chave}: {valor}" for chave, valor in
+                              (evidencia.get("atributos") or {}).items())
+        identificador, categoria = evidencia["id"], evidencia["categoria"]
+        linhas.append(
+            f'- id "{identificador}" | categoria {categoria} | '
+            + evidencia["observacao"] + (f" | atributos: {atributos}" if atributos else "")
+        )
+    return (
+        "Você é o AUDITOR VISUAL de uma vistoria de entrada de imóvel. Outro "
+        "modelo (o analista) olhou a foto anexa e registrou as evidências "
+        "abaixo. Seu trabalho é olhar a FOTO você mesmo e dizer, evidência por "
+        "evidência, se a imagem sustenta o que foi escrito.\n\n"
+        f"Cômodo: {nome_comodo}\n"
+        f"O que a análise disse desta foto: {analise_foto.get('escopo', '')} — "
+        f"{analise_foto.get('motivo', '')}\n\n"
+        f"{_bloco_fatos_confirmados(notas_extras)}"
+        "EVIDÊNCIAS DO ANALISTA:\n" + "\n".join(linhas) + "\n\n"
+        "Para CADA evidência, uma decisão:\n"
+        '- "approved": a foto mostra isso, com essas características.\n'
+        '- "rejected": a foto NÃO sustenta a evidência (o objeto não está lá, '
+        "ou é outra coisa e você não consegue dizer o quê).\n"
+        '- "corrected": é o MESMO objeto, mas a descrição erra algo que a foto '
+        'mostra com clareza (cor, material, tipo). Em "corrections", escreva a '
+        '"observacao" corrigida e, se for o caso, os "atributos" corrigidos.\n'
+        '- "needs_reanalysis": a dúvida só se resolve olhando de novo um ponto '
+        'específico. Em "focus", diga qual (ex.: "tipo do revestimento da '
+        'parede: pintura ou cerâmica").\n\n'
+        "REGRAS:\n"
+        "1. Julgue só o que a IMAGEM mostra. Na dúvida, não confirme: um item "
+        "que a foto não sustenta não pode ir para um documento assinado.\n"
+        "2. Se a foto não permite distinguir um detalhe (ex.: mármore ou "
+        "granito), NÃO o confirme: corrija para o que a foto sustenta (ex.: "
+        '"pedra polida") ou peça reanálise.\n'
+        "3. Você NÃO decide se o objeto pertence a este cômodo, se é reflexo "
+        "ou se é de ambiente vizinho — isso é decidido por regra, fora daqui. "
+        "Também não acrescente objetos novos: julgue só as evidências da lista.\n"
+        "4. Correção é para o MESMO objeto. Se a foto mostra outra coisa no "
+        'lugar, a decisão é "rejected".\n'
+        "5. Não escreva frase de laudo, estilo nem quantidade total.\n\n"
+        "IMPORTANTE — formato da resposta: um objeto JSON com a chave "
+        '"decisoes": uma lista com UMA decisão por evidência, cada uma com '
+        '"evidence_id", "decision" e "reason" (e "corrections" ou "focus" '
+        "quando a decisão pedir)."
+    )
+
+
+def montar_prompt_reanalise_dirigida(
+    nome_comodo: str, pedidos: list, notas_extras: str = "",
+) -> str:
+    """Reanálise dirigida pedida pelo validador, numa foto só.
+
+    `pedidos`: [{"id", "observacao", "focus", "reason"}]. O analista olha a
+    MESMA foto procurando só o ponto em dúvida — o cômodo não é reprocessado.
+    A resposta substitui a evidência de mesmo id; "encontrado": false quer
+    dizer que a foto não sustenta o item, e é resposta legítima."""
+    linhas = [
+        '- id "{id}": você registrou "{observacao}". Dúvida do auditor: {focus} ({reason})'.format(
+            id=pedido["id"], observacao=pedido["observacao"], focus=pedido["focus"],
+            reason=pedido["reason"])
+        for pedido in pedidos
+    ]
+    return (
+        "Segunda olhada DIRIGIDA na MESMA foto de uma vistoria. Um auditor "
+        "conferiu evidências que você registrou e pediu que você olhe de novo "
+        "só estes pontos:\n\n"
+        f"Cômodo alvo: {nome_comodo}\n\n"
+        f"{_bloco_fatos_confirmados(notas_extras)}"
+        + "\n".join(linhas) + "\n\n"
+        "Para cada id, olhe a foto procurando SÓ aquele ponto e devolva a "
+        "evidência como a foto a sustenta, com a mesma estrutura de sempre "
+        '(campo "evidencia"). Se, olhando de novo, a foto não sustenta o item, '
+        'devolva "encontrado": false — não invente para manter o item. Um '
+        "detalhe que a foto não permite distinguir fica de fora da observação.\n\n"
+        f"{INSTRUCAO_EVIDENCIAS_V2.strip()}\n\n"
+        "IMPORTANTE — formato da resposta: um objeto JSON com a chave "
+        '"reanalises": uma lista com um item por id pedido, cada um com '
+        '"evidence_id", "encontrado" e, quando encontrado, "evidencia".'
+    )
