@@ -107,6 +107,28 @@ def test_gemini_converte_imagem_e_schema_para_o_sdk():
     assert pedido["config"].response_schema == types.Schema.model_validate(ESQUEMA)
     assert pedido["config"].response_mime_type == "application/json"
 
+def test_modelo_gemini_padrao_e_configuravel_por_ambiente(monkeypatch):
+    import importlib
+    import core.config as config
+
+    # Isola o teste de qualquer GEMINI_MODEL definido na máquina.
+    modelo_original = config.MODEL_NAME
+    with monkeypatch.context() as ambiente:
+        ambiente.delenv("GEMINI_MODEL", raising=False)
+        importlib.reload(config)
+        assert config.MODEL_NAME == "gemini-3.8-flash"
+        cliente = _ClienteGemini(_Resposta('{"ok": true}'))
+        assert ProvedorGemini(cliente=cliente).modelo == "gemini-3.8-flash"
+
+        ambiente.setenv("GEMINI_MODEL", "gemini-modelo-de-teste")
+        importlib.reload(config)
+        cliente = _ClienteGemini(_Resposta('{"ok": true}'))
+        assert ProvedorGemini(cliente=cliente).modelo == "gemini-modelo-de-teste"
+
+    # Restaura o módulo ao valor que tinha antes do teste.
+    importlib.reload(config)
+    assert config.MODEL_NAME == modelo_original
+
 
 def test_gemini_tenta_de_novo_em_falha_de_rede_e_registra_telemetria():
     esperas = []
