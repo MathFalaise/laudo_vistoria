@@ -19,7 +19,8 @@ Abra o `.env` e preencha três coisas:
 
 | Campo | O que pôr |
 |---|---|
-| `GEMINI_API_KEY` | A chave do Gemini. Gere em [aistudio.google.com/apikey](https://aistudio.google.com/apikey), **num projeto com faturamento ativo** — veja o porquê abaixo. |
+| `GEMINI_API_KEY` | A chave da Gemini Developer API. Gere em [aistudio.google.com/apikey](https://aistudio.google.com/apikey), **num projeto com faturamento ativo** — veja o porquê abaixo. |
+| `GEMINI_MODEL` | Opcional. Modelo de visão; padrão: `gemini-3.8-flash`. Só troque após benchmark real. |
 | `LAUDO_ADMIN_EMAIL` | Seu e-mail. É com ele que você entra. |
 | `LAUDO_ADMIN_SENHA` | Uma senha de no mínimo 10 caracteres. Se for menor, o usuário não é criado e o log avisa. |
 

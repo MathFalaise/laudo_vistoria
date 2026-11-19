@@ -120,12 +120,20 @@ novo, no máximo 4 vezes.
 
 ### Trocar de modelo
 
-O Gemini é o padrão (`core/config.py`, `MODEL_NAME`). Os outros entram por
-`VISION_PROVIDER` / `VALIDATOR_PROVIDER` no `.env` (ver `.env.example`). Antes
-de trocar o modelo que gera os laudos, rode uma vistoria real de ponta a ponta
-e compare com `benchmark.py --provedores` — um `models.list()` respondendo não
-diz nada sobre a qualidade da leitura das fotos. E o envio de fotos de cliente
-a um provedor novo é uma decisão de LGPD, não só técnica.
+O Gemini é o padrão (`core/config.py`, `MODEL_NAME`), atualmente
+`gemini-3.8-flash`. O identificador pode ser sobrescrito por
+`GEMINI_MODEL` no `.env`; não é necessário alterar código. Os outros
+provedores entram por `VISION_PROVIDER` / `VALIDATOR_PROVIDER`.
+
+Antes de adotar outro modelo em produção, rode uma vistoria real de ponta a
+ponta e compare com `benchmark.py --provedores` em imóveis representativos.
+Um `models.list()` respondendo ou um teste com imagem sintética prova apenas
+disponibilidade/compatibilidade técnica, não a qualidade da leitura das fotos.
+A migração para `gemini-3.8-flash` altera o modelo padrão, mas ainda depende
+de homologação de qualidade com fotos reais antes de ser considerada validada.
+O envio de fotos de cliente continua exigindo projeto da API com faturamento
+ativo; a assinatura Google AI Student/Pro não substitui esse faturamento e a
+cota gratuita da API não atende à política de privacidade deste projeto.
 
 ---
 

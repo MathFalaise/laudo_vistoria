@@ -10,9 +10,10 @@ import os
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Modelo Gemini usado para leitura das fotos (precisa suportar visão).
-# gemini-3.5-flash-lite: qualidade equivalente ao 3.6-flash nos testes com
-# dados reais (11/09/2026) e entrada 5x mais barata — ver CLAUDE.md.
-MODEL_NAME = "gemini-3.5-flash-lite"
+# GEMINI_MODEL permite testar outro modelo sem alterar o código. O padrão foi
+# atualizado para gemini-3.8-flash em 19/11/2026; a qualidade no fluxo real
+# ainda precisa ser homologada com o benchmark de fotos do projeto.
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 # Itens que o modelo avaliar com certeza ABAIXO deste valor (0-100) vão para
 # Pendencias_Validacao.txt, para o vistoriador conferir nas fotos antes de o

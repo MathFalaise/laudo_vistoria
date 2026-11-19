@@ -160,14 +160,21 @@ do `.txt` — copie da linha, não redigite.
 
 ## Decisões e o porquê
 
-**Modelo e custo.** `gemini-3.5-flash-lite` (`config.MODEL_NAME`), escolhido em
-11/09/2026 quando o `gemini-3.6-flash` estourou a cota de 20 req/dia no meio
-de uma vistoria. Na camada paga a cota some, mas o flash-lite ficou:
-qualidade equivalente nos testes reais e entrada 5× mais barata (US$ 0,30 vs.
-1,50 por milhão de tokens). Trocar de modelo exige teste real de ponta a
-ponta, não só `models.list()`. Faturamento ativo desde 18/09/2026 (Nível 1,
-pré-pago); a maior vistoria custou ~US$ 0,14 (11 cômodos, 358 fotos). Conferir
-em aistudio.google.com/projects, coluna "Nível de faturamento".
+**Modelo e custo.** Desde 19/11/2026, o padrão é
+`gemini-3.8-flash` (`config.MODEL_NAME`), configurável por `GEMINI_MODEL`.
+A escolha atualiza o identificador usado pelo provedor; **não significa que a
+qualidade esteja homologada**. O histórico anterior foi
+`gemini-3.5-flash-lite`, escolhido em 11/09/2026 após o `gemini-3.6-flash`
+estourar a cota de 20 req/dia no meio de uma vistoria. A migração só deve ser
+considerada concluída depois de benchmark com as mesmas fotos reais,
+comparação de fatos corretos/omitidos/inventados, pendências e custo. Um
+`models.list()` ou imagem sintética não substitui esse teste. O modelo
+`gemini-3.8-flash` consta no catálogo oficial da Gemini Developer API; preço
+e disponibilidade de cotas podem mudar, por isso a telemetria não presume
+preço: registre-o em `LAUDO_PRECOS_MODELOS` apenas após confirmar a tabela
+vigente. Faturamento ativo desde 18/09/2026 (Nível 1, pré-pago); a maior
+vistoria registrada custou ~US$ 0,14 (11 cômodos, 358 fotos). Conferir em
+aistudio.google.com/projects, coluna "Nível de faturamento".
 
 **O Gemini cobra por IMAGEM, não por pixel.** Medido com `usage_metadata`:
 1.101 tokens por foto, igual em 1568px e em 256px. Reduzir resolução não
