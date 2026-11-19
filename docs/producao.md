@@ -122,8 +122,13 @@ novo, no máximo 4 vezes.
 
 O Gemini é o padrão (`core/config.py`, `MODEL_NAME`), atualmente
 `gemini-3.8-flash`. O identificador pode ser sobrescrito por
-`GEMINI_MODEL` no `.env`; não é necessário alterar código. Os outros
-provedores entram por `VISION_PROVIDER` / `VALIDATOR_PROVIDER`.
+`GEMINI_MODEL` no `.env`; não é necessário alterar código. A calibração
+opcional `GEMINI_MEDIA_RESOLUTION` / `GEMINI_THINKING_LEVEL` fica vazia por
+padrão e só deve ser habilitada em experimentos separados, uma variável por
+vez. O provedor valida os valores e verifica se o SDK instalado oferece os
+campos solicitados. Para Gemini 3.8 Flash, os níveis de raciocínio aceitos são
+`low`, `medium` e `high`. Os outros provedores entram por `VISION_PROVIDER` /
+`VALIDATOR_PROVIDER`.
 
 Antes de adotar outro modelo em produção, rode uma vistoria real de ponta a
 ponta e compare com `benchmark.py --provedores` em imóveis representativos.

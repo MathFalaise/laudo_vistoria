@@ -13,7 +13,11 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 # GEMINI_MODEL permite testar outro modelo sem alterar o código. O padrão foi
 # atualizado para gemini-3.8-flash em 19/11/2026; a qualidade no fluxo real
 # ainda precisa ser homologada com o benchmark de fotos do projeto.
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-3.8-flash"
+
+# Calibração opcional: vazia preserva exatamente a configuração anterior.
+GEMINI_MEDIA_RESOLUTION = os.environ.get("GEMINI_MEDIA_RESOLUTION", "").strip().lower()
+GEMINI_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "").strip().lower()
 
 # Itens que o modelo avaliar com certeza ABAIXO deste valor (0-100) vão para
 # Pendencias_Validacao.txt, para o vistoriador conferir nas fotos antes de o
