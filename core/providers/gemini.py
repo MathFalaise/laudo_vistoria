@@ -149,7 +149,7 @@ class ProvedorGemini(Provedor):
                     "O SDK google-genai instalado não suporta thinking_level "
                     "em ThinkingConfig."
                 )
-            opcoes["thinking_config"] = thinking_cls(thinking_level=self.thinking_level)
+            opcoes["thinking_config"] = thinking_cls(thinking_level=self.thinking_level.upper())
 
         return types.GenerateContentConfig(**opcoes)
 
