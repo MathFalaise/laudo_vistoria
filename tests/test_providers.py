@@ -130,6 +130,30 @@ def test_modelo_gemini_padrao_e_configuravel_por_ambiente(monkeypatch):
     assert config.MODEL_NAME == modelo_original
 
 
+def test_gemini_rejeita_calibracao_invalida_antes_da_chamada(monkeypatch):
+    cliente = _ClienteGemini(_Resposta('{"ok": true}'))
+
+    with pytest.raises(ConfiguracaoAusente, match="GEMINI_MEDIA_RESOLUTION"):
+        ProvedorGemini(cliente=cliente, media_resolution="invalida").gerar_json(
+            ["p"], ESQUEMA, 10, "teste"
+        )
+    with pytest.raises(ConfiguracaoAusente, match="GEMINI_THINKING_LEVEL"):
+        ProvedorGemini(cliente=cliente, thinking_level="invalido").gerar_json(
+            ["p"], ESQUEMA, 10, "teste"
+        )
+    # Configurações inválidas não podem chegar ao endpoint.
+    assert cliente.models.pedidos == []
+
+
+def test_gemini_38_nao_aceita_nivel_minimal():
+    cliente = _ClienteGemini(_Resposta('{"ok": true}'))
+    with pytest.raises(ConfiguracaoAusente, match="gemini-3.8-flash"):
+        ProvedorGemini(
+            cliente=cliente, modelo="gemini-3.8-flash", thinking_level="minimal"
+        ).gerar_json(["p"], ESQUEMA, 10, "teste")
+    assert cliente.models.pedidos == []
+
+
 def test_gemini_tenta_de_novo_em_falha_de_rede_e_registra_telemetria():
     esperas = []
     cliente = _ClienteGemini(httpx.ConnectError("caiu"), _Resposta('{"ok": true}'))
