@@ -17,6 +17,7 @@ Google usar as fotos de cliente.
 
 from __future__ import annotations
 
+import os
 import time
 
 import httpx
@@ -27,6 +28,21 @@ from core.providers.base import ConfiguracaoAusente, Imagem, Provedor, RespostaC
 MAX_TENTATIVAS = 4
 ESPERA_BASE_SEGUNDOS = 10
 TEMPO_LIMITE_CHAMADA_SEGUNDOS = 300
+
+_RESOLUCOES_MIDIA = {
+    "low": "MEDIA_RESOLUTION_LOW",
+    "medium": "MEDIA_RESOLUTION_MEDIUM",
+    "high": "MEDIA_RESOLUTION_HIGH",
+    "ultra_high": "MEDIA_RESOLUTION_ULTRA_HIGH",
+}
+_NIVEIS_RACIOCINIO = {"minimal", "low", "medium", "high"}
+_NIVEIS_POR_MODELO = {
+    "gemini-3.8-flash": {"low", "medium", "high"},
+    "gemini-3.7-flash": {"low", "medium", "high"},
+    "gemini-3.6-flash": _NIVEIS_RACIOCINIO,
+    "gemini-3.5-flash": _NIVEIS_RACIOCINIO,
+    "gemini-3.5-flash-lite": _NIVEIS_RACIOCINIO,
+}
 
 
 def criar_cliente_genai(chave: str | None = None):
@@ -55,12 +71,87 @@ class ProvedorGemini(Provedor):
 
     nome = "gemini"
 
-    def __init__(self, cliente=None, modelo: str | None = None, dormir=time.sleep):
-        from core.config import MODEL_NAME
+    def __init__(
+        self,
+        cliente=None,
+        modelo: str | None = None,
+        dormir=time.sleep,
+        media_resolution: str | None = None,
+        thinking_level: str | None = None,
+    ):
+        from core.config import (
+            GEMINI_MEDIA_RESOLUTION,
+            GEMINI_THINKING_LEVEL,
+            MODEL_NAME,
+        )
 
         self.cliente = cliente if cliente is not None else criar_cliente_genai()
-        self.modelo = modelo or MODEL_NAME
+        # A variável é lida também aqui (e não só no import de config.py), para
+        # permitir trocar o modelo em processos de benchmark/teste controlados.
+        modelo_env = os.environ.get("GEMINI_MODEL", "").strip()
+        self.modelo = modelo or modelo_env or MODEL_NAME
+        self.media_resolution = (
+            media_resolution if media_resolution is not None
+            else os.environ.get("GEMINI_MEDIA_RESOLUTION", GEMINI_MEDIA_RESOLUTION)
+        ).strip().lower()
+        self.thinking_level = (
+            thinking_level if thinking_level is not None
+            else os.environ.get("GEMINI_THINKING_LEVEL", GEMINI_THINKING_LEVEL)
+        ).strip().lower()
         self._dormir = dormir
+
+    def _montar_config(self, types, esquema: dict, max_tokens: int):
+        """Monta a configuração sem alterar o pedido quando a calibração está vazia.
+
+        Os parâmetros opcionais só são enviados quando foram explicitamente
+        definidos e o SDK instalado declara suporte ao campo correspondente.
+        """
+        campos_suportados = getattr(types.GenerateContentConfig, "model_fields", {})
+        opcoes = {
+            "max_output_tokens": max_tokens,
+            "response_mime_type": "application/json",
+            "response_schema": types.Schema.model_validate(esquema),
+        }
+
+        if self.media_resolution:
+            nome_enum = _RESOLUCOES_MIDIA.get(self.media_resolution)
+            if nome_enum is None:
+                raise ConfiguracaoAusente(
+                    f"GEMINI_MEDIA_RESOLUTION inválida: {self.media_resolution!r} "
+                    f"(use: {', '.join(_RESOLUCOES_MIDIA)})."
+                )
+            enum_cls = getattr(types, "MediaResolution", None)
+            if (
+                "media_resolution" not in campos_suportados
+                or enum_cls is None
+                or not hasattr(enum_cls, nome_enum)
+            ):
+                raise ConfiguracaoAusente(
+                    "O SDK google-genai instalado não suporta media_resolution "
+                    "em GenerateContentConfig."
+                )
+            opcoes["media_resolution"] = getattr(enum_cls, nome_enum)
+
+        if self.thinking_level:
+            niveis_modelo = _NIVEIS_POR_MODELO.get(self.modelo, _NIVEIS_RACIOCINIO)
+            if self.thinking_level not in niveis_modelo:
+                raise ConfiguracaoAusente(
+                    f"GEMINI_THINKING_LEVEL {self.thinking_level!r} não é suportado "
+                    f"pelo modelo {self.modelo!r}; use: {', '.join(sorted(niveis_modelo))}."
+                )
+            thinking_cls = getattr(types, "ThinkingConfig", None)
+            thinking_fields = getattr(thinking_cls, "model_fields", {}) if thinking_cls else {}
+            if (
+                "thinking_config" not in campos_suportados
+                or "thinking_level" not in thinking_fields
+            ):
+                raise ConfiguracaoAusente(
+                    "O SDK google-genai instalado não suporta thinking_level "
+                    "em ThinkingConfig."
+                )
+            opcoes["thinking_config"] = thinking_cls(thinking_level=self.thinking_level)
+
+        return types.GenerateContentConfig(**opcoes)
 
     @staticmethod
     def _parte(parte):
@@ -75,11 +166,7 @@ class ProvedorGemini(Provedor):
         from google.genai import errors, types
 
         conteudo = [self._parte(parte) for parte in partes]
-        config = types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-            response_mime_type="application/json",
-            response_schema=types.Schema.model_validate(esquema),
-        )
+        config = self._montar_config(types, esquema, max_tokens)
         inicio = time.monotonic()
         imagens = sum(1 for parte in partes if isinstance(parte, Imagem))
         resposta, tentativa = None, 0
