@@ -33,7 +33,6 @@ _RESOLUCOES_MIDIA = {
     "low": "MEDIA_RESOLUTION_LOW",
     "medium": "MEDIA_RESOLUTION_MEDIUM",
     "high": "MEDIA_RESOLUTION_HIGH",
-    "ultra_high": "MEDIA_RESOLUTION_ULTRA_HIGH",
 }
 _NIVEIS_RACIOCINIO = {"minimal", "low", "medium", "high"}
 _NIVEIS_POR_MODELO = {
