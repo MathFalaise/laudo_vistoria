@@ -34,7 +34,7 @@ _RESOLUCOES_MIDIA = {
     "medium": "MEDIA_RESOLUTION_MEDIUM",
     "high": "MEDIA_RESOLUTION_HIGH",
 }
-_NIVEIS_RACIOCINIO = {"minimal", "low", "medium", "high"}
+_NIVEIS_RACIOCINIO = {"low", "medium", "high"}
 _NIVEIS_POR_MODELO = {
     "gemini-3.8-flash": {"low", "medium", "high"},
     "gemini-3.7-flash": {"low", "medium", "high"},
